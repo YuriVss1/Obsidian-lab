@@ -5,6 +5,6 @@
 // não o segredo da chave). NÃO cole aqui a "secret key" (sb_secret_...), essa é privada.
 
 window.OBSIDIAN_CONFIG = {
-  SUPABASE_URL: "COLE_AQUI_A_URL_DO_SEU_PROJETO",
-  SUPABASE_ANON_KEY: "COLE_AQUI_A_PUBLISHABLE_KEY",
+  SUPABASE_URL: "https://fueqszzaejmjfgqvmdst.supabase.co",
+  SUPABASE_ANON_KEY: "sb_publishable_kBfrad7kBNN3bO8Ys9w9pQ_UKB-Se79",
 };
