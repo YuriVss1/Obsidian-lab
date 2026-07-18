@@ -11,20 +11,27 @@ arquivos pro GitHub, sem precisar de Node/npm/git instalados na tua máquina.
   em Puro (100%), 50%, 10% ou 1% (ou uma % customizada).
 - **Detecção automática de família olfativa** ao digitar o nome do material
   (dicionário embutido com matérias-primas comuns de perfumaria).
-- **Fórmulas**: cadastro de criações com pirâmide olfativa (topo/coração/fundo),
+- **Fórmulas**: cadastro de receitas técnicas com pirâmide olfativa (topo/coração/fundo),
   puxando materiais direto do estoque ou digitados manualmente.
 - **Calculadora de lote**: informa tamanho do frasco + concentração final e
   calcula quanto pesar de cada material, avisando se falta estoque.
-- **Backup**: exportar/importar tudo em `.json` (mesclar ou substituir).
+- **Acordes**: controle de testes de acordes em maceração — cada acorde tem sua
+  lista de materiais (%), um prazo estimado de maturação e uma barra que muda
+  de vermelho pra maduro conforme os dias passam. Dá pra registrar anotações
+  de evolução ao longo do tempo (dia 1, dia 7, dia 15...).
+- **Perfumes**: painel de acompanhamento das criações — nome, briefing/proposta,
+  fórmula técnica vinculada (opcional), e a mesma barra de maturação + registro
+  de evolução dos Acordes.
+- **Backup**: exportar/importar tudo (materiais, fórmulas, acordes, perfumes)
+  em `.json` (mesclar ou substituir).
 - Banco de dados real no **Supabase** (Postgres) — não depende de navegador
   nem de sessão do Claude.
 
 ## 1. Banco (Supabase)
 
-1. Cria um projeto novo em [supabase.com](https://supabase.com) (ou usa um que já tenha).
-2. **SQL Editor → New query** → cola o conteúdo de `sql/schema.sql` → **Run**.
-3. **Project Settings → API Keys** → copia a **Publishable key** (começa com
-   `sb_publishable_...`) e a **Project URL**.
+**Se é a primeira vez configurando:** roda o `sql/schema.sql` inteiro (SQL Editor → New query → cola → Run).
+
+**Se já tem `materials` e `formulas` rodando em produção:** não precisa apagar nada — só roda o `sql/migration_acordes_perfumes.sql`, que só *acrescenta* as tabelas `accords` e `perfumes` sem mexer no que já existe.
 
 ## 2. Configurar
 

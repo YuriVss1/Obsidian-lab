@@ -172,12 +172,72 @@ const toFormulaRow = (f) => ({
   notes: f.notes,
 });
 
+const mapAccordFromDb = (row) => ({
+  id: row.id,
+  name: row.name,
+  materials: Array.isArray(row.materials) ? row.materials : [],
+  maturationDays: Number(row.maturation_days),
+  notes: row.notes || "",
+  log: Array.isArray(row.log) ? row.log : [],
+  createdAt: row.created_at ? new Date(row.created_at).getTime() : Date.now(),
+});
+const toAccordRow = (a) => ({
+  name: a.name,
+  materials: a.materials,
+  maturation_days: a.maturationDays,
+  notes: a.notes,
+  log: a.log || [],
+});
+
+const mapPerfumeFromDb = (row) => ({
+  id: row.id,
+  name: row.name,
+  briefing: row.briefing || "",
+  formulaId: row.formula_id || null,
+  maturationDays: Number(row.maturation_days),
+  notes: row.notes || "",
+  log: Array.isArray(row.log) ? row.log : [],
+  createdAt: row.created_at ? new Date(row.created_at).getTime() : Date.now(),
+});
+const toPerfumeRow = (p) => ({
+  name: p.name,
+  briefing: p.briefing,
+  formula_id: p.formulaId || null,
+  maturation_days: p.maturationDays,
+  notes: p.notes,
+  log: p.log || [],
+});
+
+/* ------------------------------- MATURAÇÃO --------------------------------- */
+
+const DAY_MS = 24 * 60 * 60 * 1000;
+
+function maturityInfo(createdAt, maturationDays) {
+  const elapsedDays = (Date.now() - createdAt) / DAY_MS;
+  const ratio = Math.max(0, Math.min(1, elapsedDays / (maturationDays || 1)));
+  // interpola de vermelho (hue 4) até verde-dourado (hue 90) conforme a maturação avança
+  const hue = 4 + ratio * 86;
+  const color = `hsl(${hue.toFixed(0)}, 58%, 52%)`;
+  const daysLeft = Math.max(0, Math.ceil(maturationDays - elapsedDays));
+  const mature = elapsedDays >= maturationDays;
+  return {
+    ratio,
+    color,
+    daysElapsed: Math.floor(elapsedDays),
+    daysLeft,
+    mature,
+    label: mature ? "maduro" : `faltam ${daysLeft} dia${daysLeft === 1 ? "" : "s"}`,
+  };
+}
+
 /* --------------------------------- STATE ---------------------------------- */
 
 const state = {
   tab: "estoque",
   items: [],
   formulas: [],
+  accords: [],
+  perfumes: [],
   loaded: false,
   search: "",
   familyFilter: "all",
@@ -207,6 +267,14 @@ async function reload() {
   const { data: forms, error: e2 } = await sb.from("formulas").select("*").order("created_at", { ascending: true });
   if (e2) showToast("Não consegui carregar as fórmulas do banco.");
   else state.formulas = (forms || []).map(mapFormulaFromDb);
+
+  const { data: accs, error: e3 } = await sb.from("accords").select("*").order("created_at", { ascending: true });
+  if (e3) showToast("Não consegui carregar os acordes do banco.");
+  else state.accords = (accs || []).map(mapAccordFromDb);
+
+  const { data: perfs, error: e4 } = await sb.from("perfumes").select("*").order("created_at", { ascending: true });
+  if (e4) showToast("Não consegui carregar os perfumes do banco.");
+  else state.perfumes = (perfs || []).map(mapPerfumeFromDb);
 
   state.loaded = true;
 }
@@ -251,7 +319,54 @@ async function deleteFormula(id) {
   return true;
 }
 
+async function addAccord(record) {
+  const { data, error } = await sb.from("accords").insert(toAccordRow(record)).select().single();
+  if (error || !data) { showToast("Não consegui salvar o acorde no banco."); return false; }
+  state.accords.push(mapAccordFromDb(data));
+  return true;
+}
+async function updateAccord(id, record) {
+  const { error } = await sb.from("accords").update(toAccordRow(record)).eq("id", id);
+  if (error) { showToast("Não consegui atualizar o acorde no banco."); return false; }
+  const idx = state.accords.findIndex((a) => a.id === id);
+  if (idx >= 0) state.accords[idx] = { ...record, id, createdAt: state.accords[idx].createdAt };
+  return true;
+}
+async function deleteAccord(id) {
+  const { error } = await sb.from("accords").delete().eq("id", id);
+  if (error) { showToast("Não consegui remover o acorde do banco."); return false; }
+  state.accords = state.accords.filter((a) => a.id !== id);
+  return true;
+}
+
+async function addPerfume(record) {
+  const { data, error } = await sb.from("perfumes").insert(toPerfumeRow(record)).select().single();
+  if (error || !data) { showToast("Não consegui salvar o perfume no banco."); return false; }
+  state.perfumes.push(mapPerfumeFromDb(data));
+  return true;
+}
+async function updatePerfume(id, record) {
+  const { error } = await sb.from("perfumes").update(toPerfumeRow(record)).eq("id", id);
+  if (error) { showToast("Não consegui atualizar o perfume no banco."); return false; }
+  const idx = state.perfumes.findIndex((p) => p.id === id);
+  if (idx >= 0) state.perfumes[idx] = { ...record, id, createdAt: state.perfumes[idx].createdAt };
+  return true;
+}
+async function deletePerfume(id) {
+  const { error } = await sb.from("perfumes").delete().eq("id", id);
+  if (error) { showToast("Não consegui remover o perfume do banco."); return false; }
+  state.perfumes = state.perfumes.filter((p) => p.id !== id);
+  return true;
+}
+
 /* --------------------------------- RENDER --------------------------------- */
+
+const TABS = [
+  { key: "estoque", label: "Estoque" },
+  { key: "formulas", label: "Fórmulas" },
+  { key: "acordes", label: "Acordes" },
+  { key: "perfumes", label: "Perfumes" },
+];
 
 function render() {
   const app = document.getElementById("app");
@@ -263,9 +378,7 @@ function render() {
           <span class="mark-sub">Laboratório</span>
         </div>
         <div class="tabs">
-          <div class="tab-slider" style="transform:${state.tab === "estoque" ? "translateX(0)" : "translateX(100%)"}"></div>
-          <button class="tab-btn ${state.tab === "estoque" ? "active" : ""}" data-action="tab" data-tab="estoque">Estoque</button>
-          <button class="tab-btn ${state.tab === "formulas" ? "active" : ""}" data-action="tab" data-tab="formulas">Fórmulas</button>
+          ${TABS.map((t) => `<button class="tab-btn ${state.tab === t.key ? "active" : ""}" data-action="tab" data-tab="${t.key}">${esc(t.label)}</button>`).join("")}
         </div>
         <div class="backup-actions">
           <input type="file" accept="application/json" id="importFile" style="display:none" />
@@ -288,9 +401,10 @@ function renderTabContent() {
     el.innerHTML = `<div class="empty">Carregando laboratório...</div>`;
     return;
   }
-  el.innerHTML = state.tab === "estoque" ? estoqueShellHtml() : formulasShellHtml();
-  if (state.tab === "estoque") wireEstoqueShell();
-  else wireFormulasShell();
+  if (state.tab === "estoque") { el.innerHTML = estoqueShellHtml(); wireEstoqueShell(); }
+  else if (state.tab === "formulas") { el.innerHTML = formulasShellHtml(); wireFormulasShell(); }
+  else if (state.tab === "acordes") { el.innerHTML = acordesShellHtml(); wireAcordesShell(); }
+  else if (state.tab === "perfumes") { el.innerHTML = perfumesShellHtml(); wirePerfumesShell(); }
 }
 
 /* ------------------------------ ESTOQUE TAB -------------------------------- */
@@ -988,6 +1102,390 @@ function renderFormulaRows() {
   });
 }
 
+/* -------------------------------- MATURAÇÃO UI ------------------------------ */
+
+function maturityBarHtml(info) {
+  return `
+    <div class="maturity-row">
+      <div class="maturity-bar"><div class="maturity-fill" style="width:${(info.ratio * 100).toFixed(0)}%;background:${info.color}"></div></div>
+      <span class="maturity-label" style="color:${info.color}">${esc(info.label)}</span>
+    </div>`;
+}
+
+function logListHtml(log) {
+  if (!log || log.length === 0) return `<div class="log-empty">Nenhum registro de evolução ainda.</div>`;
+  const sorted = [...log].sort((a, b) => new Date(a.date) - new Date(b.date));
+  return `<div class="log-list">${sorted
+    .map((entry) => `<div class="log-entry"><span class="log-date">${esc(formatDateBR(entry.date))}</span><span class="log-note">${esc(entry.note)}</span></div>`)
+    .join("")}</div>`;
+}
+
+function formatDateBR(iso) {
+  const d = new Date(iso);
+  if (isNaN(d.getTime())) return iso;
+  return d.toLocaleDateString("pt-BR");
+}
+
+/* -------------------------------- ACORDES TAB ------------------------------- */
+
+function acordesShellHtml() {
+  return `
+    <div class="form-header">
+      <span class="form-count">${state.accords.length} acorde${state.accords.length === 1 ? "" : "s"} em teste</span>
+      <button class="btn-primary" data-action="new-accord">+ Novo acorde</button>
+    </div>
+    <div id="accordsGrid"></div>
+  `;
+}
+
+function wireAcordesShell() {
+  document.getElementById("tabContent").addEventListener("click", delegatedAcordesClicks);
+  document.getElementById("tabContent").addEventListener("submit", (e) => e.preventDefault());
+  renderAccordsGrid();
+}
+
+function delegatedAcordesClicks(e) {
+  const btn = e.target.closest("[data-action]");
+  if (!btn) return;
+  const action = btn.dataset.action;
+  if (action === "new-accord") openAccordModal(null);
+  else if (action === "edit-accord") openAccordModal(btn.dataset.id);
+  else if (action === "delete-accord") handleDeleteAccord(btn.dataset.id);
+  else if (action === "add-accord-log") handleAddLog("accord", btn.dataset.id);
+}
+
+function renderAccordsGrid() {
+  const el = document.getElementById("accordsGrid");
+  if (!el) return;
+  const sorted = [...state.accords].sort((a, b) => a.createdAt - b.createdAt);
+  if (sorted.length === 0) {
+    el.innerHTML = `
+      <div class="empty">
+        <div class="empty-title">Nenhum acorde em teste</div>
+        <div class="empty-sub">Cadastre um acorde pra acompanhar a maceração — a cor muda de vermelho pra maduro conforme os dias passam.</div>
+        <button class="btn-primary" data-action="new-accord">+ Novo acorde</button>
+      </div>`;
+    return;
+  }
+  el.innerHTML = `<div class="forms-grid">${sorted.map((a) => accordCardHtml(a)).join("")}</div>`;
+}
+
+function accordCardHtml(a) {
+  const info = maturityInfo(a.createdAt, a.maturationDays);
+  const totalPct = a.materials.reduce((s, m) => s + m.percentage, 0);
+  const matListHtml = a.materials.map((m) => `<div class="mat-row"><span class="mat-name">${esc(m.name)}</span><span class="mat-pct">${fmt(m.percentage)}%</span></div>`).join("");
+  return `
+    <div class="fcard">
+      <div class="fcard-eyebrow">
+        <span class="fcard-num">criado em ${esc(formatDateBR(new Date(a.createdAt).toISOString()))}</span>
+        <span class="fcard-type">${a.maturationDays}d de maceração</span>
+      </div>
+      <div class="fcard-name">${esc(a.name)}</div>
+      ${maturityBarHtml(info)}
+      <div class="fcard-total"><span>${a.materials.length} material${a.materials.length === 1 ? "" : "es"}</span><span>total ${fmt(totalPct)}%</span></div>
+      <div class="mat-list">${matListHtml}</div>
+      ${a.notes ? `<div class="card-notes">${esc(a.notes)}</div>` : ""}
+      <div class="log-section">
+        <div class="label" style="margin-top:0;">Evolução</div>
+        ${logListHtml(a.log)}
+        <form class="log-form" data-log-form="accord-${a.id}">
+          <input type="text" class="input" placeholder="Como tá hoje?" id="logNote-accord-${a.id}" />
+          <button type="submit" class="btn-ghost small" data-action="add-accord-log" data-id="${a.id}">+ registrar</button>
+        </form>
+      </div>
+      <div class="fcard-actions">
+        <div class="fcard-actions-left">
+          <button class="btn-text" data-action="edit-accord" data-id="${a.id}">editar</button>
+          <button class="btn-text danger" data-action="delete-accord" data-id="${a.id}">remover</button>
+        </div>
+      </div>
+    </div>`;
+}
+
+async function handleDeleteAccord(id) {
+  if (!confirm("Remover esse acorde?")) return;
+  await deleteAccord(id);
+  renderAccordsGrid();
+}
+
+async function handleAddLog(type, id) {
+  const input = document.getElementById(`logNote-${type}-${id}`);
+  const note = input ? input.value.trim() : "";
+  if (!note) return;
+  const entry = { date: new Date().toISOString(), note };
+  if (type === "accord") {
+    const item = state.accords.find((a) => a.id === id);
+    if (!item) return;
+    const record = { ...item, log: [...item.log, entry] };
+    await updateAccord(id, record);
+    renderAccordsGrid();
+  } else {
+    const item = state.perfumes.find((p) => p.id === id);
+    if (!item) return;
+    const record = { ...item, log: [...item.log, entry] };
+    await updatePerfume(id, record);
+    renderPerfumesGrid();
+  }
+}
+
+let accordRows = [];
+
+function openAccordModal(editId) {
+  const editing = editId ? state.accords.find((a) => a.id === editId) : null;
+  accordRows = editing
+    ? editing.materials.map((m) => ({ rowId: uid(), inventoryId: m.inventoryId || "", name: m.name, percentage: String(m.percentage) }))
+    : [{ rowId: uid(), inventoryId: "", name: "", percentage: "" }];
+
+  const root = document.getElementById("modalRoot");
+  root.innerHTML = `
+    <div class="overlay" id="overlay">
+      <form class="modal modal-wide" id="accordForm">
+        <div class="modal-title">${editing ? "Editar acorde" : "Novo acorde"}</div>
+
+        <label class="label">Nome do acorde</label>
+        <input class="input" id="ac-name" value="${editing ? esc(editing.name) : ""}" placeholder="Ex: Acorde âmbar modificado" />
+
+        <label class="label">Prazo estimado de maceração (dias)</label>
+        <input class="input" id="ac-maturation" type="number" step="1" value="${editing ? editing.maturationDays : "18"}" />
+        <div style="font-size:11px;color:var(--ash-dim);margin-top:4px;">Referência: leve/cítrico ~7-10d · equilibrado ~15-20d · pesado/resinoso ~25-35d</div>
+
+        <label class="label" style="margin-top:16px;">Materiais do acorde (%)</label>
+        <div id="accordRowsContainer"></div>
+        <button type="button" class="add-row-btn" id="addAccordRowBtn">+ adicionar material</button>
+
+        <label class="label">Notas</label>
+        <textarea class="input" id="ac-notes" style="min-height:60px;resize:vertical;">${editing ? esc(editing.notes) : ""}</textarea>
+
+        <div class="form-error" id="accordFormError" style="display:none;"></div>
+
+        <div class="modal-actions">
+          <button type="button" class="btn-ghost" data-action="close-modal">Cancelar</button>
+          <button type="submit" class="btn-primary">${editing ? "Salvar alterações" : "Adicionar acorde"}</button>
+        </div>
+      </form>
+    </div>`;
+
+  document.getElementById("overlay").addEventListener("click", (e) => { if (e.target.id === "overlay") closeModal(); });
+  document.getElementById("accordForm").addEventListener("click", (e) => e.stopPropagation());
+  root.querySelector('[data-action="close-modal"]').addEventListener("click", closeModal);
+
+  renderAccordRows();
+  document.getElementById("addAccordRowBtn").addEventListener("click", () => {
+    accordRows.push({ rowId: uid(), inventoryId: "", name: "", percentage: "" });
+    renderAccordRows();
+  });
+
+  document.getElementById("accordForm").addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const name = document.getElementById("ac-name").value.trim();
+    const errEl = document.getElementById("accordFormError");
+    const materials = accordRows
+      .map((r) => {
+        const invSelect = document.getElementById("acrow-inv-" + r.rowId);
+        const nameInput = document.getElementById("acrow-name-" + r.rowId);
+        const pctInput = document.getElementById("acrow-pct-" + r.rowId);
+        const inventoryId = invSelect ? invSelect.value : "";
+        let rname;
+        if (inventoryId) {
+          const inv = state.items.find((it) => it.id === inventoryId);
+          rname = inv ? inv.name : "";
+        } else {
+          rname = nameInput ? nameInput.value.trim() : "";
+        }
+        return { id: uid(), inventoryId: inventoryId || null, name: rname, percentage: parseFloat(pctInput ? pctInput.value : 0) || 0 };
+      })
+      .filter((m) => m.name);
+
+    if (!name) { errEl.textContent = "Dá um nome pro acorde antes de salvar."; errEl.style.display = "block"; return; }
+    if (materials.length === 0) { errEl.textContent = "Adiciona pelo menos um material com nome preenchido."; errEl.style.display = "block"; return; }
+    errEl.style.display = "none";
+
+    const record = {
+      name,
+      materials,
+      maturationDays: parseFloat(document.getElementById("ac-maturation").value) || 18,
+      notes: document.getElementById("ac-notes").value.trim(),
+      log: editing ? editing.log : [],
+    };
+
+    const ok = editing ? await updateAccord(editing.id, record) : await addAccord(record);
+    if (ok) { closeModal(); renderAccordsGrid(); }
+  });
+}
+
+function renderAccordRows() {
+  const container = document.getElementById("accordRowsContainer");
+  container.innerHTML = accordRows
+    .map(
+      (row, i) => `
+      <div class="mat-editor" data-row="${row.rowId}">
+        <div class="mat-editor-top">
+          <span class="mat-editor-idx">material ${String(i + 1).padStart(2, "0")}</span>
+          ${accordRows.length > 1 ? `<button type="button" class="remove-row" data-remove="${row.rowId}">remover</button>` : ""}
+        </div>
+        <select class="input" id="acrow-inv-${row.rowId}">${inventoryOptionsHtml(row.inventoryId)}</select>
+        <div class="manual-fields-${row.rowId}" style="${row.inventoryId ? "display:none;" : ""}">
+          <input class="input" id="acrow-name-${row.rowId}" placeholder="Nome do material" value="${esc(row.name)}" />
+        </div>
+        <label class="label" style="margin-top:0;">% no acorde</label>
+        <input class="input" id="acrow-pct-${row.rowId}" type="number" step="0.01" value="${esc(row.percentage)}" />
+      </div>`
+    )
+    .join("");
+
+  accordRows.forEach((row) => {
+    const invSelect = document.getElementById("acrow-inv-" + row.rowId);
+    invSelect.addEventListener("change", () => {
+      const wrap = container.querySelector(".manual-fields-" + row.rowId);
+      if (wrap) wrap.style.display = invSelect.value ? "none" : "";
+    });
+    const removeBtn = container.querySelector(`[data-remove="${row.rowId}"]`);
+    if (removeBtn) removeBtn.addEventListener("click", () => { accordRows = accordRows.filter((r) => r.rowId !== row.rowId); renderAccordRows(); });
+  });
+}
+
+/* -------------------------------- PERFUMES TAB ------------------------------ */
+
+function perfumesShellHtml() {
+  return `
+    <div class="form-header">
+      <span class="form-count">${state.perfumes.length} cria${state.perfumes.length === 1 ? "ção" : "ções"} em acompanhamento</span>
+      <button class="btn-primary" data-action="new-perfume">+ Nova criação</button>
+    </div>
+    <div id="perfumesGrid"></div>
+  `;
+}
+
+function wirePerfumesShell() {
+  document.getElementById("tabContent").addEventListener("click", delegatedPerfumesClicks);
+  document.getElementById("tabContent").addEventListener("submit", (e) => e.preventDefault());
+  renderPerfumesGrid();
+}
+
+function delegatedPerfumesClicks(e) {
+  const btn = e.target.closest("[data-action]");
+  if (!btn) return;
+  const action = btn.dataset.action;
+  if (action === "new-perfume") openPerfumeModal(null);
+  else if (action === "edit-perfume") openPerfumeModal(btn.dataset.id);
+  else if (action === "delete-perfume") handleDeletePerfume(btn.dataset.id);
+  else if (action === "add-perfume-log") handleAddLog("perfume", btn.dataset.id);
+}
+
+function renderPerfumesGrid() {
+  const el = document.getElementById("perfumesGrid");
+  if (!el) return;
+  const sorted = [...state.perfumes].sort((a, b) => a.createdAt - b.createdAt);
+  if (sorted.length === 0) {
+    el.innerHTML = `
+      <div class="empty">
+        <div class="empty-title">Nenhuma criação em acompanhamento</div>
+        <div class="empty-sub">Registra o briefing de um perfume — nome, proposta e prazo de maceração — e acompanha a maturação até ficar pronto pra avaliar de verdade.</div>
+        <button class="btn-primary" data-action="new-perfume">+ Nova criação</button>
+      </div>`;
+    return;
+  }
+  el.innerHTML = `<div class="forms-grid">${sorted.map((p) => perfumeCardHtml(p)).join("")}</div>`;
+}
+
+function perfumeCardHtml(p) {
+  const info = maturityInfo(p.createdAt, p.maturationDays);
+  const linkedFormula = p.formulaId ? state.formulas.find((f) => f.id === p.formulaId) : null;
+  return `
+    <div class="fcard">
+      <div class="fcard-eyebrow">
+        <span class="fcard-num">criado em ${esc(formatDateBR(new Date(p.createdAt).toISOString()))}</span>
+        <span class="fcard-type">${p.maturationDays}d de maceração</span>
+      </div>
+      <div class="fcard-name">${esc(p.name)}</div>
+      ${p.briefing ? `<div class="fcard-concept">${esc(p.briefing)}</div>` : ""}
+      ${linkedFormula ? `<div style="font-size:11px;color:var(--gold);">fórmula vinculada: ${esc(linkedFormula.name)}</div>` : ""}
+      ${maturityBarHtml(info)}
+      ${p.notes ? `<div class="card-notes">${esc(p.notes)}</div>` : ""}
+      <div class="log-section">
+        <div class="label" style="margin-top:0;">Evolução</div>
+        ${logListHtml(p.log)}
+        <form class="log-form" data-log-form="perfume-${p.id}">
+          <input type="text" class="input" placeholder="Como tá hoje?" id="logNote-perfume-${p.id}" />
+          <button type="submit" class="btn-ghost small" data-action="add-perfume-log" data-id="${p.id}">+ registrar</button>
+        </form>
+      </div>
+      <div class="fcard-actions">
+        <div class="fcard-actions-left">
+          <button class="btn-text" data-action="edit-perfume" data-id="${p.id}">editar</button>
+          <button class="btn-text danger" data-action="delete-perfume" data-id="${p.id}">remover</button>
+        </div>
+      </div>
+    </div>`;
+}
+
+async function handleDeletePerfume(id) {
+  if (!confirm("Remover essa criação?")) return;
+  await deletePerfume(id);
+  renderPerfumesGrid();
+}
+
+function openPerfumeModal(editId) {
+  const editing = editId ? state.perfumes.find((p) => p.id === editId) : null;
+  const root = document.getElementById("modalRoot");
+  root.innerHTML = `
+    <div class="overlay" id="overlay">
+      <form class="modal" id="perfumeForm">
+        <div class="modal-title">${editing ? "Editar criação" : "Nova criação"}</div>
+
+        <label class="label">Nome do perfume</label>
+        <input class="input" id="pf-name" value="${editing ? esc(editing.name) : ""}" placeholder="Ex: Brasa de Mel" />
+
+        <label class="label">Briefing / proposta</label>
+        <textarea class="input" id="pf-briefing" style="min-height:70px;resize:vertical;" placeholder="O que esse perfume propõe, pra quem, a ideia por trás">${editing ? esc(editing.briefing) : ""}</textarea>
+
+        <label class="label">Fórmula vinculada (opcional)</label>
+        <select class="input" id="pf-formula">
+          <option value="">— nenhuma —</option>
+          ${state.formulas.map((f) => `<option value="${f.id}" ${editing && editing.formulaId === f.id ? "selected" : ""}>${esc(f.name)}</option>`).join("")}
+        </select>
+
+        <label class="label">Prazo estimado de maceração (dias)</label>
+        <input class="input" id="pf-maturation" type="number" step="1" value="${editing ? editing.maturationDays : "18"}" />
+        <div style="font-size:11px;color:var(--ash-dim);margin-top:4px;">Referência: leve/cítrico ~7-10d · equilibrado ~15-20d · pesado/resinoso ~25-35d</div>
+
+        <label class="label">Notas</label>
+        <textarea class="input" id="pf-notes" style="min-height:60px;resize:vertical;">${editing ? esc(editing.notes) : ""}</textarea>
+
+        <div class="form-error" id="perfumeFormError" style="display:none;"></div>
+
+        <div class="modal-actions">
+          <button type="button" class="btn-ghost" data-action="close-modal">Cancelar</button>
+          <button type="submit" class="btn-primary">${editing ? "Salvar alterações" : "Adicionar criação"}</button>
+        </div>
+      </form>
+    </div>`;
+
+  document.getElementById("overlay").addEventListener("click", (e) => { if (e.target.id === "overlay") closeModal(); });
+  document.getElementById("perfumeForm").addEventListener("click", (e) => e.stopPropagation());
+  root.querySelector('[data-action="close-modal"]').addEventListener("click", closeModal);
+
+  document.getElementById("perfumeForm").addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const name = document.getElementById("pf-name").value.trim();
+    const errEl = document.getElementById("perfumeFormError");
+    if (!name) { errEl.textContent = "Dá um nome pro perfume antes de salvar."; errEl.style.display = "block"; return; }
+    errEl.style.display = "none";
+
+    const record = {
+      name,
+      briefing: document.getElementById("pf-briefing").value.trim(),
+      formulaId: document.getElementById("pf-formula").value || null,
+      maturationDays: parseFloat(document.getElementById("pf-maturation").value) || 18,
+      notes: document.getElementById("pf-notes").value.trim(),
+      log: editing ? editing.log : [],
+    };
+
+    const ok = editing ? await updatePerfume(editing.id, record) : await addPerfume(record);
+    if (ok) { closeModal(); renderPerfumesGrid(); }
+  });
+}
+
 /* -------------------------------- TOPBAR ----------------------------------- */
 
 function wireTopbar() {
@@ -1005,11 +1503,17 @@ function wireTopbar() {
 
 function renderTabbarActive() {
   document.querySelectorAll(".tab-btn").forEach((b) => b.classList.toggle("active", b.dataset.tab === state.tab));
-  document.querySelector(".tab-slider").style.transform = state.tab === "estoque" ? "translateX(0)" : "translateX(100%)";
 }
 
 function handleExport() {
-  const payload = { app: "obsidian-laboratorio", exportedAt: new Date().toISOString(), items: state.items, formulas: state.formulas };
+  const payload = {
+    app: "obsidian-laboratorio",
+    exportedAt: new Date().toISOString(),
+    items: state.items,
+    formulas: state.formulas,
+    accords: state.accords,
+    perfumes: state.perfumes,
+  };
   const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" });
   const url = URL.createObjectURL(blob);
   const a = document.createElement("a");
@@ -1034,6 +1538,8 @@ function handleFileChosen(e) {
         showToast("Esse arquivo não parece um backup válido do laboratório.");
         return;
       }
+      parsed.accords = Array.isArray(parsed.accords) ? parsed.accords : [];
+      parsed.perfumes = Array.isArray(parsed.perfumes) ? parsed.perfumes : [];
       openImportConfirm(parsed);
     } catch (err) {
       showToast("Não consegui ler esse arquivo. Confere se é o JSON exportado daqui.");
@@ -1049,7 +1555,7 @@ function openImportConfirm(parsed) {
       <div class="modal" id="importModal">
         <div class="modal-title">Importar backup</div>
         <p style="font-size:13px;color:var(--ash);line-height:1.6;">
-          O arquivo tem ${parsed.items.length} material(is) e ${parsed.formulas.length} fórmula(s). Como tu quer aplicar?
+          O arquivo tem ${parsed.items.length} material(is), ${parsed.formulas.length} fórmula(s), ${parsed.accords.length} acorde(s) e ${parsed.perfumes.length} criação(ões). Como tu quer aplicar?
         </p>
         <p style="font-size:12px;color:var(--ash-dim);line-height:1.6;">
           <strong style="color:var(--white-dim)">Mesclar</strong> mantém o que já existe e só acrescenta o que for novo.
@@ -1075,10 +1581,16 @@ async function confirmImport(parsed, mode) {
     if (mode === "replace") {
       await sb.from("materials").delete().gte("created_at", "1900-01-01");
       await sb.from("formulas").delete().gte("created_at", "1900-01-01");
+      await sb.from("accords").delete().gte("created_at", "1900-01-01");
+      await sb.from("perfumes").delete().gte("created_at", "1900-01-01");
       const matRows = parsed.items.map(toMaterialRow);
       const formRows = parsed.formulas.map(toFormulaRow);
+      const accRows = parsed.accords.map(toAccordRow);
+      const perfRows = parsed.perfumes.map(toPerfumeRow);
       if (matRows.length) await sb.from("materials").insert(matRows);
       if (formRows.length) await sb.from("formulas").insert(formRows);
+      if (accRows.length) await sb.from("accords").insert(accRows);
+      if (perfRows.length) await sb.from("perfumes").insert(perfRows);
     } else {
       const dedupeKey = (it) => `${(it.name || "").toLowerCase()}|${it.family}|${it.concentration}`;
       const existingKeys = new Set(state.items.map(dedupeKey));
@@ -1088,6 +1600,14 @@ async function confirmImport(parsed, mode) {
       const existingFormNames = new Set(state.formulas.map((f) => (f.name || "").toLowerCase()));
       const newForms = parsed.formulas.filter((f) => !existingFormNames.has((f.name || "").toLowerCase())).map(toFormulaRow);
       if (newForms.length) await sb.from("formulas").insert(newForms);
+
+      const existingAccordNames = new Set(state.accords.map((a) => (a.name || "").toLowerCase()));
+      const newAccords = parsed.accords.filter((a) => !existingAccordNames.has((a.name || "").toLowerCase())).map(toAccordRow);
+      if (newAccords.length) await sb.from("accords").insert(newAccords);
+
+      const existingPerfumeNames = new Set(state.perfumes.map((p) => (p.name || "").toLowerCase()));
+      const newPerfumes = parsed.perfumes.filter((p) => !existingPerfumeNames.has((p.name || "").toLowerCase())).map(toPerfumeRow);
+      if (newPerfumes.length) await sb.from("perfumes").insert(newPerfumes);
     }
     await reload();
     closeModal();
