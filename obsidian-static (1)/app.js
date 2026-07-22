@@ -2,7 +2,7 @@
    OBSIDIAN — Laboratório (Módulos de Produção, Lotes e Custos Financeiros)
    ========================================================================== */
 
-import { CostsService } from './costService.js';
+import { CostService } from './costService.js';
 import { produceBatch } from './batchesService.js';
 
 /* ------------------------------- CONFIG ---------------------------------- */
