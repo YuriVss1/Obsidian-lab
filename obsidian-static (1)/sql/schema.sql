@@ -8,6 +8,7 @@ create table if not exists materials (
   name text not null,
   category text not null default 'quimico' check (category in ('quimico','oleo_essencial','absoluto')),
   family text not null,
+  typical_position text check (typical_position in ('topo','coracao','fundo') or typical_position is null),
   concentration numeric not null default 100,
   unit text not null default 'g',
   quantity numeric not null default 0,

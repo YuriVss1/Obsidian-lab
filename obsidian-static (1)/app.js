@@ -128,6 +128,7 @@ const mapMaterialFromDb = (row) => ({
   name: row.name,
   category: row.category || "quimico",
   family: row.family,
+  typicalPosition: row.typical_position || null,
   concentration: Number(row.concentration),
   unit: row.unit,
   quantity: Number(row.quantity),
@@ -142,6 +143,7 @@ const toMaterialRow = (it) => ({
   name: it.name,
   category: it.category,
   family: it.family,
+  typical_position: it.typicalPosition || null,
   concentration: it.concentration,
   unit: it.unit,
   quantity: it.quantity,
@@ -242,6 +244,7 @@ const state = {
   search: "",
   familyFilter: "all",
   categoryFilter: "all",
+  positionFilter: "all",
   collapsed: {},
 };
 
@@ -419,6 +422,7 @@ function estoqueShellHtml() {
       </div>
       <div class="chips scroll" id="categoryChips"></div>
       <div class="chips scroll" id="familyChips"></div>
+      <div class="chips scroll" id="positionChips"></div>
     </div>
     <div id="materialsGroups"></div>
   `;
@@ -432,6 +436,7 @@ function wireEstoqueShell() {
   document.getElementById("tabContent").addEventListener("click", delegatedEstoqueClicks);
   renderCategoryChips();
   renderFamilyChips();
+  renderPositionChips();
   renderSpectrum();
   updateMaterialsList();
 }
@@ -453,6 +458,10 @@ function delegatedEstoqueClicks(e) {
   } else if (action === "fam-filter") {
     state.familyFilter = btn.dataset.fam;
     renderFamilyChips();
+    updateMaterialsList();
+  } else if (action === "pos-filter") {
+    state.positionFilter = btn.dataset.pos;
+    renderPositionChips();
     updateMaterialsList();
   }
 }
@@ -500,13 +509,27 @@ function renderSpectrum() {
   `;
 }
 
+function renderPositionChips() {
+  const el = document.getElementById("positionChips");
+  el.innerHTML =
+    `<button class="chip ${state.positionFilter === "all" ? "active" : ""}" data-action="pos-filter" data-pos="all">Todas as notas</button>` +
+    POSITIONS.map(
+      (p) =>
+        `<button class="chip ${state.positionFilter === p.key ? "active" : ""}" data-action="pos-filter" data-pos="${p.key}"><span class="dot" style="background:${p.color}"></span>${esc(p.label)}</button>`
+    ).join("") +
+    `<button class="chip ${state.positionFilter === "none" ? "active" : ""}" data-action="pos-filter" data-pos="none">Sem nota definida</button>`;
+}
+
 function getFilteredMaterials() {
   const q = state.search.trim().toLowerCase();
   return state.items.filter((it) => {
     const matchFam = state.familyFilter === "all" || it.family === state.familyFilter;
     const matchCat = state.categoryFilter === "all" || it.category === state.categoryFilter;
+    const matchPos =
+      state.positionFilter === "all" ||
+      (state.positionFilter === "none" ? !it.typicalPosition : it.typicalPosition === state.positionFilter);
     const matchSearch = !q || it.name.toLowerCase().includes(q) || (it.cas || "").toLowerCase().includes(q);
-    return matchFam && matchCat && matchSearch;
+    return matchFam && matchCat && matchPos && matchSearch;
   });
 }
 
@@ -553,6 +576,7 @@ function updateMaterialsList() {
 function materialCardHtml(it, f) {
   const low = it.minStock != null && it.quantity <= it.minStock;
   const catLabel = catMap[it.category] ? catMap[it.category].label : "";
+  const posInfo = it.typicalPosition ? posMap[it.typicalPosition] : null;
   return `
     <div class="card ${low ? "card-low" : ""}">
       <div class="card-bar" style="background:${f.color}"></div>
@@ -561,7 +585,10 @@ function materialCardHtml(it, f) {
           <div class="card-name">${esc(it.name)}</div>
           <div class="badge">${it.concentration === 100 ? "Puro" : it.concentration + "%"}</div>
         </div>
-        <div style="font-size:10.5px;color:var(--ash-dim);">${esc(catLabel)}</div>
+        <div style="display:flex;align-items:center;gap:6px;">
+          <span style="font-size:10.5px;color:var(--ash-dim);">${esc(catLabel)}</span>
+          ${posInfo ? `<span class="badge" style="color:${posInfo.color};border-color:${posInfo.color}55;">${esc(posInfo.label)}</span>` : ""}
+        </div>
         <div class="card-qty">${fmt(it.quantity)} <span style="color:var(--ash);font-size:12px;">${esc(it.unit)}</span></div>
         ${it.minStock != null ? `<div class="card-min ${low ? "low" : ""}">mínimo: ${fmt(it.minStock)} ${esc(it.unit)}</div>` : ""}
         <div class="card-meta">
@@ -614,6 +641,12 @@ function openMaterialModal(editId, presetFamily) {
             </select>
           </div>
         </div>
+
+        <label class="label">Nota característica (método Jean Carles)</label>
+        <select class="input" id="f-typicalPosition">
+          <option value="">— não definida —</option>
+          ${POSITIONS.map((p) => `<option value="${p.key}" ${editing && editing.typicalPosition === p.key ? "selected" : ""}>${esc(p.label)}</option>`).join("")}
+        </select>
 
         <div class="row2">
           <div>
@@ -721,6 +754,7 @@ function openMaterialModal(editId, presetFamily) {
       name,
       category: document.getElementById("f-category").value,
       family: document.getElementById("f-family").value,
+      typicalPosition: document.getElementById("f-typicalPosition").value || null,
       concentration: conc,
       unit: document.getElementById("f-unit").value,
       quantity: parseFloat(quantityRaw) || 0,
@@ -1037,7 +1071,8 @@ function inventoryOptionsHtml(selectedId) {
     if (opts.length === 0) return;
     html += `<optgroup label="${esc(fam.label)}">`;
     opts.forEach((it) => {
-      html += `<option value="${it.id}" ${selectedId === it.id ? "selected" : ""}>${esc(it.name)} — ${it.concentration === 100 ? "puro" : it.concentration + "%"} (${fmt(it.quantity)}${esc(it.unit)} em estoque)</option>`;
+      const posLabel = it.typicalPosition && posMap[it.typicalPosition] ? ` · ${posMap[it.typicalPosition].label}` : "";
+      html += `<option value="${it.id}" ${selectedId === it.id ? "selected" : ""}>${esc(it.name)} — ${it.concentration === 100 ? "puro" : it.concentration + "%"}${posLabel} (${fmt(it.quantity)}${esc(it.unit)} em estoque)</option>`;
     });
     html += `</optgroup>`;
   });
@@ -1084,6 +1119,13 @@ function renderFormulaRows() {
     invSelect.addEventListener("change", () => {
       const wrap = container.querySelector(".manual-fields-" + row.rowId);
       wrap.style.display = invSelect.value ? "none" : "";
+      if (invSelect.value) {
+        const inv = state.items.find((it) => it.id === invSelect.value);
+        if (inv && inv.typicalPosition) {
+          const posSelect = document.getElementById("row-pos-" + row.rowId);
+          if (posSelect) posSelect.value = inv.typicalPosition;
+        }
+      }
     });
     const removeBtn = container.querySelector(`[data-remove="${row.rowId}"]`);
     if (removeBtn) {
