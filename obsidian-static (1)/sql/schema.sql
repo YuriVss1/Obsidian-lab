@@ -17,6 +17,9 @@ create table if not exists materials (
   cas text,
   supplier text,
   notes text,
+  price_paid numeric,
+  purchase_quantity numeric,
+  purchase_date date,
   created_at timestamptz not null default now()
 );
 
@@ -52,10 +55,38 @@ create table if not exists perfumes (
   created_at timestamptz not null default now()
 );
 
+create table if not exists lotes (
+  id uuid primary key default gen_random_uuid(),
+  formula_id uuid references formulas(id) on delete set null,
+  formula_name text not null,
+  code text not null,
+  volume_ml numeric not null,
+  type text not null check (type in ('teste', 'producao')),
+  maturation_days numeric not null default 15,
+  notes text,
+  consumed jsonb not null default '[]'::jsonb,
+  log jsonb not null default '[]'::jsonb,
+  created_at timestamptz not null default now()
+);
+
+create table if not exists stock_movements (
+  id uuid primary key default gen_random_uuid(),
+  material_id uuid references materials(id) on delete set null,
+  material_name text not null,
+  type text not null check (type in ('entrada', 'saida', 'ajuste')),
+  quantity numeric not null,
+  unit text,
+  origin text,
+  notes text,
+  created_at timestamptz not null default now()
+);
+
 alter table materials enable row level security;
 alter table formulas enable row level security;
 alter table accords enable row level security;
 alter table perfumes enable row level security;
+alter table lotes enable row level security;
+alter table stock_movements enable row level security;
 
 -- Política aberta: a chave publishable (anon) do teu site consegue ler/escrever.
 -- Isso é esperado — a chave é feita pra ficar no navegador. A proteção real
@@ -80,3 +111,13 @@ create policy "public read perfumes" on perfumes for select using (true);
 create policy "public write perfumes" on perfumes for insert with check (true);
 create policy "public update perfumes" on perfumes for update using (true);
 create policy "public delete perfumes" on perfumes for delete using (true);
+
+create policy "public read lotes" on lotes for select using (true);
+create policy "public write lotes" on lotes for insert with check (true);
+create policy "public update lotes" on lotes for update using (true);
+create policy "public delete lotes" on lotes for delete using (true);
+
+create policy "public read stock_movements" on stock_movements for select using (true);
+create policy "public write stock_movements" on stock_movements for insert with check (true);
+create policy "public update stock_movements" on stock_movements for update using (true);
+create policy "public delete stock_movements" on stock_movements for delete using (true);

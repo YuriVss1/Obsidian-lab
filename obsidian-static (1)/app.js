@@ -121,98 +121,6 @@ const fmt = (n) => (Number.isFinite(n) ? (Math.round(n * 100) / 100).toString() 
 const esc = (s) =>
   String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 
-const fmtBRL = (n) => "R$ " + (Number.isFinite(n) ? n : 0).toLocaleString("pt-BR", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-
-// Custo unitário (R$ por g ou ml) de um material, a partir do que foi pago.
-function materialUnitCost(mat) {
-  if (!mat) return 0;
-  const paid = Number(mat.pricePaid);
-  const qty = Number(mat.quantityPurchased);
-  if (!Number.isFinite(paid) || !Number.isFinite(qty) || qty <= 0) return 0;
-  return paid / qty;
-}
-function materialHasCost(mat) {
-  return Number(mat.pricePaid) > 0 && Number(mat.quantityPurchased) > 0;
-}
-
-// Quantos ml/g de cada material são necessários pra um lote de `batchMl` ml
-// numa fórmula com concentração `concPct`%.
-function computeFormulaNeeds(formula, batchMl, concPct) {
-  const compound = (batchMl * concPct) / 100;
-  return formula.materials.map((m) => {
-    const inv = m.inventoryId ? state.items.find((it) => it.id === m.inventoryId) : null;
-    const needed = (compound * m.percentage) / 100;
-    const unitCost = inv ? materialUnitCost(inv) : 0;
-    return {
-      materialId: m.inventoryId || null,
-      name: m.name,
-      unit: inv ? inv.unit : "g",
-      needed,
-      available: inv ? inv.quantity : null,
-      unitCost,
-      cost: needed * unitCost,
-      hasCost: inv ? materialHasCost(inv) : false,
-    };
-  });
-}
-
-// Custo por ml do blend final da fórmula, na concentração padrão dela.
-function formulaCostPerMl(formula) {
-  const needs = computeFormulaNeeds(formula, 1, formula.concentrationPct);
-  return needs.reduce((a, n) => a + n.cost, 0);
-}
-function formulaCostIncomplete(formula) {
-  return computeFormulaNeeds(formula, 1, formula.concentrationPct).some((n) => n.materialId && !n.hasCost);
-}
-
-// Produção máxima possível (ml) da fórmula, limitada pelo ingrediente mais escasso.
-function formulaMaxBatch(formula) {
-  const conc = formula.concentrationPct || 1;
-  let max = Infinity;
-  let limiting = null;
-  formula.materials.forEach((m) => {
-    if (!m.inventoryId || !m.percentage) return;
-    const inv = state.items.find((it) => it.id === m.inventoryId);
-    if (!inv) return;
-    // needed(batchMl) = batchMl * conc/100 * pct/100  ==>  batchMl = inv.quantity / (conc/100 * pct/100)
-    const perMl = (conc / 100) * (m.percentage / 100);
-    if (perMl <= 0) return;
-    const possible = inv.quantity / perMl;
-    if (possible < max) { max = possible; limiting = inv.name; }
-  });
-  if (!Number.isFinite(max)) return { max: null, limiting: null };
-  return { max, limiting };
-}
-
-// MÓDULO 18/19: custo final do perfume (fórmula + embalagem) e preço sugerido.
-function perfumeCostBreakdown(perfume) {
-  const formula = perfume.formulaId ? state.formulas.find((f) => f.id === perfume.formulaId) : null;
-  const fillMl = perfume.fillMl || 50;
-  const formulaCost = formula ? formulaCostPerMl(formula) * fillMl : 0;
-  const pkgLines = (perfume.packaging || []).map((line) => {
-    const pkg = state.packaging.find((p) => p.id === line.packagingItemId);
-    const unitCost = pkg ? packagingUnitCost(pkg) : 0;
-    const qty = Number(line.qty) || 0;
-    return { name: pkg ? pkg.name : "(insumo removido)", category: pkg ? pkg.category : "outro", qty, unitCost, cost: qty * unitCost };
-  });
-  const packagingCost = pkgLines.reduce((a, l) => a + l.cost, 0);
-  const total = formulaCost + packagingCost;
-  const markup = perfume.markup || 4;
-  const suggestedPrice = total * markup;
-  return { formulaCost, pkgLines, packagingCost, total, markup, suggestedPrice, fillMl, hasFormula: !!formula };
-}
-
-function generateBatchCode(formula) {
-  const initials = (formula.name || "LT")
-    .split(/\s+/)
-    .filter((w) => w.length)
-    .map((w) => w[0].toUpperCase())
-    .slice(0, 3)
-    .join("") || "LT";
-  const count = state.batches.filter((b) => b.formulaId === formula.id).length + 1;
-  return `${initials}-${String(count).padStart(3, "0")}`;
-}
-
 /* ----------------------------- DB <-> JS ---------------------------------- */
 
 const mapMaterialFromDb = (row) => ({
@@ -230,7 +138,7 @@ const mapMaterialFromDb = (row) => ({
   supplier: row.supplier || "",
   notes: row.notes || "",
   pricePaid: row.price_paid != null ? Number(row.price_paid) : null,
-  quantityPurchased: row.quantity_purchased != null ? Number(row.quantity_purchased) : null,
+  purchaseQuantity: row.purchase_quantity != null ? Number(row.purchase_quantity) : null,
   purchaseDate: row.purchase_date || null,
 });
 
@@ -247,10 +155,33 @@ const toMaterialRow = (it) => ({
   cas: it.cas,
   supplier: it.supplier,
   notes: it.notes,
-  price_paid: it.pricePaid != null && it.pricePaid !== "" ? it.pricePaid : null,
-  quantity_purchased: it.quantityPurchased != null && it.quantityPurchased !== "" ? it.quantityPurchased : null,
+  price_paid: it.pricePaid != null ? it.pricePaid : null,
+  purchase_quantity: it.purchaseQuantity != null ? it.purchaseQuantity : null,
   purchase_date: it.purchaseDate || null,
 });
+
+function unitCost(material) {
+  if (!material || material.pricePaid == null || !material.purchaseQuantity || material.purchaseQuantity <= 0) return null;
+  return material.pricePaid / material.purchaseQuantity;
+}
+
+function formulaCostInfo(formula) {
+  let costPerCompoundUnit = 0;
+  let missingCount = 0;
+  formula.materials.forEach((m) => {
+    const inv = m.inventoryId ? state.items.find((it) => it.id === m.inventoryId) : null;
+    const uc = inv ? unitCost(inv) : null;
+    if (uc == null) { missingCount += 1; return; }
+    costPerCompoundUnit += (m.percentage / 100) * uc;
+  });
+  const costPerFinishedMl = costPerCompoundUnit * (formula.concentrationPct / 100);
+  return { costPerFinishedMl, missingCount, totalMaterials: formula.materials.length };
+}
+
+function brl(n) {
+  if (!Number.isFinite(n)) return "—";
+  return "R$ " + n.toFixed(2).replace(".", ",");
+}
 
 const mapFormulaFromDb = (row) => ({
   id: row.id,
@@ -297,9 +228,6 @@ const mapPerfumeFromDb = (row) => ({
   maturationDays: Number(row.maturation_days),
   notes: row.notes || "",
   log: Array.isArray(row.log) ? row.log : [],
-  packaging: Array.isArray(row.packaging) ? row.packaging : [],
-  fillMl: row.fill_ml != null ? Number(row.fill_ml) : 50,
-  markup: row.markup != null ? Number(row.markup) : 4,
   createdAt: row.created_at ? new Date(row.created_at).getTime() : Date.now(),
 });
 const toPerfumeRow = (p) => ({
@@ -309,86 +237,53 @@ const toPerfumeRow = (p) => ({
   maturation_days: p.maturationDays,
   notes: p.notes,
   log: p.log || [],
-  packaging: p.packaging || [],
-  fill_ml: p.fillMl || 50,
-  markup: p.markup || 4,
 });
 
-const mapBatchFromDb = (row) => ({
+const mapLoteFromDb = (row) => ({
   id: row.id,
   formulaId: row.formula_id || null,
+  formulaName: row.formula_name,
   code: row.code,
-  batchType: row.batch_type || "teste",
-  quantityMl: Number(row.quantity_ml),
+  volumeMl: Number(row.volume_ml),
+  type: row.type,
   maturationDays: Number(row.maturation_days),
-  status: row.status || "macerando",
-  ingredients: Array.isArray(row.ingredients) ? row.ingredients : [],
-  totalCost: Number(row.total_cost) || 0,
-  costPerMl: Number(row.cost_per_ml) || 0,
   notes: row.notes || "",
+  consumed: Array.isArray(row.consumed) ? row.consumed : [],
   log: Array.isArray(row.log) ? row.log : [],
   createdAt: row.created_at ? new Date(row.created_at).getTime() : Date.now(),
 });
-const toBatchRow = (b) => ({
-  formula_id: b.formulaId || null,
-  code: b.code,
-  batch_type: b.batchType,
-  quantity_ml: b.quantityMl,
-  maturation_days: b.maturationDays,
-  status: b.status,
-  ingredients: b.ingredients || [],
-  total_cost: b.totalCost || 0,
-  cost_per_ml: b.costPerMl || 0,
-  notes: b.notes,
-  log: b.log || [],
+const toLoteRow = (l) => ({
+  formula_id: l.formulaId || null,
+  formula_name: l.formulaName,
+  code: l.code,
+  volume_ml: l.volumeMl,
+  type: l.type,
+  maturation_days: l.maturationDays,
+  notes: l.notes,
+  consumed: l.consumed || [],
+  log: l.log || [],
 });
 
 const mapMovementFromDb = (row) => ({
   id: row.id,
-  materialId: row.material_id,
-  type: row.movement_type,
+  materialId: row.material_id || null,
+  materialName: row.material_name,
+  type: row.type,
   quantity: Number(row.quantity),
+  unit: row.unit || "",
   origin: row.origin || "",
   notes: row.notes || "",
   createdAt: row.created_at ? new Date(row.created_at).getTime() : Date.now(),
 });
 const toMovementRow = (m) => ({
-  material_id: m.materialId,
-  movement_type: m.type,
+  material_id: m.materialId || null,
+  material_name: m.materialName,
+  type: m.type,
   quantity: m.quantity,
+  unit: m.unit,
   origin: m.origin,
   notes: m.notes,
 });
-
-const mapPackagingFromDb = (row) => ({
-  id: row.id,
-  name: row.name,
-  category: row.category || "frasco",
-  price: Number(row.price) || 0,
-  quantity: Number(row.quantity) || 1,
-  supplier: row.supplier || "",
-  createdAt: row.created_at ? new Date(row.created_at).getTime() : Date.now(),
-});
-const toPackagingRow = (p) => ({
-  name: p.name,
-  category: p.category,
-  price: p.price,
-  quantity: p.quantity,
-  supplier: p.supplier,
-});
-
-const PACKAGING_CATEGORIES = [
-  { key: "frasco", label: "Frasco" },
-  { key: "valvula", label: "Válvula" },
-  { key: "tampa", label: "Tampa" },
-  { key: "caixa", label: "Caixa" },
-  { key: "etiqueta", label: "Etiqueta" },
-  { key: "outro", label: "Outro" },
-];
-const pkgCatMap = Object.fromEntries(PACKAGING_CATEGORIES.map((c) => [c.key, c]));
-function packagingUnitCost(p) {
-  return p.quantity > 0 ? p.price / p.quantity : 0;
-}
 
 /* ------------------------------- MATURAÇÃO --------------------------------- */
 
@@ -415,14 +310,13 @@ function maturityInfo(createdAt, maturationDays) {
 /* --------------------------------- STATE ---------------------------------- */
 
 const state = {
-  tab: "painel",
+  tab: "estoque",
   items: [],
   formulas: [],
   accords: [],
   perfumes: [],
-  batches: [],
+  lotes: [],
   movements: [],
-  packaging: [],
   loaded: false,
   search: "",
   familyFilter: "all",
@@ -462,17 +356,13 @@ async function reload() {
   if (e4) showToast("Não consegui carregar os perfumes do banco.");
   else state.perfumes = (perfs || []).map(mapPerfumeFromDb);
 
-  const { data: batches, error: e5 } = await sb.from("batches").select("*").order("created_at", { ascending: true });
+  const { data: lts, error: e5 } = await sb.from("lotes").select("*").order("created_at", { ascending: true });
   if (e5) showToast("Não consegui carregar os lotes do banco.");
-  else state.batches = (batches || []).map(mapBatchFromDb);
+  else state.lotes = (lts || []).map(mapLoteFromDb);
 
-  const { data: moves, error: e6 } = await sb.from("stock_movements").select("*").order("created_at", { ascending: false }).limit(300);
-  if (e6) showToast("Não consegui carregar a movimentação de estoque.");
-  else state.movements = (moves || []).map(mapMovementFromDb);
-
-  const { data: pkgs, error: e7 } = await sb.from("packaging_items").select("*").order("name", { ascending: true });
-  if (e7) showToast("Não consegui carregar os insumos de embalagem.");
-  else state.packaging = (pkgs || []).map(mapPackagingFromDb);
+  const { data: movs, error: e6 } = await sb.from("stock_movements").select("*").order("created_at", { ascending: false });
+  if (e6) showToast("Não consegui carregar as movimentações do banco.");
+  else state.movements = (movs || []).map(mapMovementFromDb);
 
   state.loaded = true;
 }
@@ -557,104 +447,146 @@ async function deletePerfume(id) {
   return true;
 }
 
-async function addBatch(record) {
-  const { data, error } = await sb.from("batches").insert(toBatchRow(record)).select().single();
+async function addLote(record) {
+  const { data, error } = await sb.from("lotes").insert(toLoteRow(record)).select().single();
   if (error || !data) { showToast("Não consegui salvar o lote no banco."); return null; }
-  const mapped = mapBatchFromDb(data);
-  state.batches.push(mapped);
+  const mapped = mapLoteFromDb(data);
+  state.lotes.push(mapped);
   return mapped;
 }
-async function updateBatch(id, record) {
-  const { error } = await sb.from("batches").update(toBatchRow(record)).eq("id", id);
+async function updateLote(id, record) {
+  const { error } = await sb.from("lotes").update(toLoteRow(record)).eq("id", id);
   if (error) { showToast("Não consegui atualizar o lote no banco."); return false; }
-  const idx = state.batches.findIndex((b) => b.id === id);
-  if (idx >= 0) state.batches[idx] = { ...record, id, createdAt: state.batches[idx].createdAt };
+  const idx = state.lotes.findIndex((l) => l.id === id);
+  if (idx >= 0) state.lotes[idx] = { ...record, id, createdAt: state.lotes[idx].createdAt };
   return true;
 }
-async function deleteBatch(id) {
-  const { error } = await sb.from("batches").delete().eq("id", id);
+async function deleteLote(id) {
+  const { error } = await sb.from("lotes").delete().eq("id", id);
   if (error) { showToast("Não consegui remover o lote do banco."); return false; }
-  state.batches = state.batches.filter((b) => b.id !== id);
+  state.lotes = state.lotes.filter((l) => l.id !== id);
   return true;
 }
 
 async function addMovement(record) {
   const { data, error } = await sb.from("stock_movements").insert(toMovementRow(record)).select().single();
-  if (error || !data) return null;
+  if (error || !data) { showToast("Não consegui registrar a movimentação no banco."); return null; }
   const mapped = mapMovementFromDb(data);
   state.movements.unshift(mapped);
   return mapped;
 }
 
-async function addPackaging(record) {
-  const { data, error } = await sb.from("packaging_items").insert(toPackagingRow(record)).select().single();
-  if (error || !data) { showToast("Não consegui salvar o insumo no banco."); return false; }
-  state.packaging.push(mapPackagingFromDb(data));
-  return true;
-}
-async function updatePackaging(id, record) {
-  const { error } = await sb.from("packaging_items").update(toPackagingRow(record)).eq("id", id);
-  if (error) { showToast("Não consegui atualizar o insumo no banco."); return false; }
-  const idx = state.packaging.findIndex((p) => p.id === id);
-  if (idx >= 0) state.packaging[idx] = { ...record, id, createdAt: state.packaging[idx].createdAt };
-  return true;
-}
-async function deletePackaging(id) {
-  const { error } = await sb.from("packaging_items").delete().eq("id", id);
-  if (error) { showToast("Não consegui remover o insumo do banco."); return false; }
-  state.packaging = state.packaging.filter((p) => p.id !== id);
-  return true;
+/* ------------------------------ PRODUÇÃO DE LOTE ---------------------------- */
+// Núcleo dos Módulos 1-5 do briefing: cálculo automático, validação de estoque,
+// desconto automático e histórico de movimentação, tudo em uma transação lógica.
+
+function generateLoteCode(formulaName) {
+  const stopwords = new Set(["de", "da", "do", "das", "dos", "e", "a", "o"]);
+  const initials = formulaName
+    .split(/\s+/)
+    .filter((w) => w && !stopwords.has(w.toLowerCase()))
+    .map((w) => w[0].toUpperCase())
+    .join("");
+  const prefix = initials || "LT";
+  const existing = state.lotes.filter((l) => l.code.startsWith(prefix + "-"));
+  const nextNum = existing.length + 1;
+  return `${prefix}-${String(nextNum).padStart(3, "0")}`;
 }
 
-// MÓDULO 3 e 4: valida estoque e, se ok, produz o lote (debita materiais + grava movimentações).
-async function produceBatch(formula, { quantityMl, batchType, maturationDays, notes }) {
-  const needs = computeFormulaNeeds(formula, quantityMl, formula.concentrationPct);
-  const shortages = needs.filter((n) => n.materialId && n.available != null && n.available < n.needed);
-  if (shortages.length > 0) {
-    return { ok: false, shortages };
+// Calcula quanto de cada material (ligado ao estoque) é necessário pra um volume de lote.
+// Reaproveita a mesma matemática da calculadora de lote das Fórmulas.
+function computeLoteRequirements(formula, volumeMl) {
+  const compoundTotal = (volumeMl * formula.concentrationPct) / 100;
+  const rows = formula.materials.map((m) => {
+    const inv = m.inventoryId ? state.items.find((it) => it.id === m.inventoryId) : null;
+    const needed = (compoundTotal * m.percentage) / 100;
+    return {
+      materialId: m.inventoryId || null,
+      name: m.name,
+      needed,
+      unit: inv ? inv.unit : "g",
+      available: inv ? inv.quantity : null,
+      linked: !!inv,
+      ok: inv ? inv.quantity >= needed : false,
+    };
+  });
+  return { compoundTotal, rows };
+}
+
+// Executa a produção: valida, desconta estoque, registra movimentações e cria o lote.
+// Retorna { ok: true, lote } ou { ok: false, rows } com o motivo da falha pra exibir.
+async function produceLote({ formula, volumeMl, type, maturationDays, notes }) {
+  const { rows } = computeLoteRequirements(formula, volumeMl);
+
+  const unlinked = rows.filter((r) => !r.linked);
+  if (unlinked.length > 0) {
+    return { ok: false, reason: "unlinked", rows };
+  }
+  const insufficient = rows.filter((r) => !r.ok);
+  if (insufficient.length > 0) {
+    return { ok: false, reason: "insufficient", rows };
   }
 
-  const code = generateBatchCode(formula);
-  const totalCost = needs.reduce((a, n) => a + n.cost, 0);
-  const batch = await addBatch({
+  const code = generateLoteCode(formula.name);
+  const consumed = [];
+
+  // desconta estoque + registra movimentação de saída, material por material
+  for (const r of rows) {
+    const inv = state.items.find((it) => it.id === r.materialId);
+    const newQty = inv.quantity - r.needed;
+    const ok = await updateItem(inv.id, { ...inv, quantity: newQty });
+    if (!ok) return { ok: false, reason: "update-failed", rows };
+    await addMovement({
+      materialId: inv.id,
+      materialName: inv.name,
+      type: "saida",
+      quantity: r.needed,
+      unit: r.unit,
+      origin: `Lote ${code}`,
+      notes: "",
+    });
+    consumed.push({ materialId: inv.id, name: inv.name, quantity: r.needed, unit: r.unit });
+  }
+
+  const lote = await addLote({
     formulaId: formula.id,
+    formulaName: formula.name,
     code,
-    batchType,
-    quantityMl,
+    volumeMl,
+    type,
     maturationDays,
-    status: "macerando",
-    ingredients: needs,
-    totalCost,
-    costPerMl: quantityMl > 0 ? totalCost / quantityMl : 0,
-    notes: notes || "",
+    notes,
+    consumed,
     log: [],
   });
-  if (!batch) return { ok: false, shortages: [] };
+  if (!lote) return { ok: false, reason: "lote-failed", rows };
+  return { ok: true, lote };
+}
 
-  const lowStockHits = [];
-  for (const n of needs) {
-    if (!n.materialId) continue;
-    const inv = state.items.find((it) => it.id === n.materialId);
-    if (!inv) continue;
-    const newQty = Math.max(0, inv.quantity - n.needed);
-    await updateItem(inv.id, { ...inv, quantity: newQty });
-    await addMovement({ materialId: inv.id, type: "saida", quantity: n.needed, origin: `Lote ${code}`, notes: `Produção da fórmula "${formula.name}"` });
-    if (inv.minStock != null && newQty < inv.minStock) lowStockHits.push(inv.name);
-  }
+async function registerManualMovement({ materialId, type, quantity, origin, notes }) {
+  const inv = state.items.find((it) => it.id === materialId);
+  if (!inv) return { ok: false, reason: "not-found" };
+  let newQty;
+  if (type === "entrada") newQty = inv.quantity + quantity;
+  else if (type === "saida") {
+    if (inv.quantity < quantity) return { ok: false, reason: "insufficient", available: inv.quantity };
+    newQty = inv.quantity - quantity;
+  } else newQty = inv.quantity + quantity; // ajuste: quantity é o delta (pode ser negativo)
 
-  return { ok: true, batch, lowStockHits };
+  const ok = await updateItem(inv.id, { ...inv, quantity: newQty });
+  if (!ok) return { ok: false, reason: "update-failed" };
+  await addMovement({ materialId: inv.id, materialName: inv.name, type, quantity, unit: inv.unit, origin: origin || "Manual", notes: notes || "" });
+  return { ok: true };
 }
 
 /* --------------------------------- RENDER --------------------------------- */
 
 const TABS = [
-  { key: "painel", label: "Painel" },
   { key: "estoque", label: "Estoque" },
   { key: "formulas", label: "Fórmulas" },
-  { key: "lotes", label: "Lotes" },
   { key: "acordes", label: "Acordes" },
   { key: "perfumes", label: "Perfumes" },
-  { key: "embalagens", label: "Embalagens" },
+  { key: "lotes", label: "Lotes" },
 ];
 
 function render() {
@@ -690,108 +622,17 @@ function renderTabContent() {
     el.innerHTML = `<div class="empty">Carregando laboratório...</div>`;
     return;
   }
-  if (state.tab === "painel") { el.innerHTML = painelShellHtml(); wirePainelShell(); }
-  else if (state.tab === "estoque") { el.innerHTML = estoqueShellHtml(); wireEstoqueShell(); }
+  if (state.tab === "estoque") { el.innerHTML = estoqueShellHtml(); wireEstoqueShell(); }
   else if (state.tab === "formulas") { el.innerHTML = formulasShellHtml(); wireFormulasShell(); }
-  else if (state.tab === "lotes") { el.innerHTML = lotesShellHtml(); wireLotesShell(); }
   else if (state.tab === "acordes") { el.innerHTML = acordesShellHtml(); wireAcordesShell(); }
   else if (state.tab === "perfumes") { el.innerHTML = perfumesShellHtml(); wirePerfumesShell(); }
-  else if (state.tab === "embalagens") { el.innerHTML = embalagensShellHtml(); wireEmbalagensShell(); }
-}
-
-/* -------------------------------- PAINEL TAB -------------------------------- */
-/* MÓDULOS 20 (financeiro) e 21 (geral) */
-
-function painelShellHtml() {
-  const stockValue = state.items.reduce((a, it) => a + it.quantity * materialUnitCost(it), 0);
-  const lowStock = state.items.filter((it) => it.minStock != null && it.quantity < it.minStock);
-
-  const priciestMaterial = [...state.items].filter(materialHasCost).sort((a, b) => materialUnitCost(b) - materialUnitCost(a))[0];
-  const priciestFormula = [...state.formulas].sort((a, b) => formulaCostPerMl(b) - formulaCostPerMl(a))[0];
-  const perfumeCosts = state.perfumes.map((p) => ({ p, cost: perfumeCostBreakdown(p).total }));
-  const priciestPerfume = perfumeCosts.sort((a, b) => b.cost - a.cost)[0];
-
-  const producedBatches = state.batches;
-  const avgBatchCost = producedBatches.length ? producedBatches.reduce((a, b) => a + b.totalCost, 0) / producedBatches.length : 0;
-
-  const now = new Date();
-  const monthStart = new Date(now.getFullYear(), now.getMonth(), 1).getTime();
-  const consumedThisMonth = state.movements
-    .filter((m) => m.type === "saida" && m.createdAt >= monthStart)
-    .reduce((a, m) => {
-      const mat = state.items.find((it) => it.id === m.materialId);
-      return a + (mat ? m.quantity * materialUnitCost(mat) : 0);
-    }, 0);
-
-  const macerating = [
-    ...state.batches.filter((b) => b.status === "macerando").map((b) => ({ label: `Lote ${b.code}`, createdAt: b.createdAt, maturationDays: b.maturationDays })),
-    ...state.accords.map((a) => ({ label: `Acorde · ${a.name}`, createdAt: a.createdAt, maturationDays: a.maturationDays })),
-    ...state.perfumes.map((p) => ({ label: `Perfume · ${p.name}`, createdAt: p.createdAt, maturationDays: p.maturationDays })),
-  ]
-    .map((x) => ({ ...x, info: maturityInfo(x.createdAt, x.maturationDays) }))
-    .filter((x) => !x.info.mature)
-    .sort((a, b) => a.info.daysLeft - b.info.daysLeft);
-  const nextReady = macerating[0];
-
-  const kpis = [
-    { label: "Materiais cadastrados", value: state.items.length },
-    { label: "Fórmulas", value: state.formulas.length },
-    { label: "Lotes em maceração", value: state.batches.filter((b) => b.status === "macerando").length },
-    { label: "Perfumes em desenvolvimento", value: state.perfumes.length },
-    { label: "Materiais abaixo do mínimo", value: lowStock.length, warn: lowStock.length > 0 },
-    { label: "Valor total em estoque", value: fmtBRL(stockValue) },
-    { label: "Custo médio dos lotes", value: fmtBRL(avgBatchCost) },
-    { label: "Valor consumido este mês", value: fmtBRL(consumedThisMonth) },
-  ];
-
-  return `
-    <div class="panel-grid">
-      ${kpis.map((k) => `
-        <div class="panel-card ${k.warn ? "panel-warn" : ""}">
-          <div class="panel-card-label">${esc(k.label)}</div>
-          <div class="panel-card-value">${esc(String(k.value))}</div>
-        </div>`).join("")}
-    </div>
-
-    <div class="panel-row">
-      <div class="panel-block">
-        <div class="panel-block-title">Destaques</div>
-        <div class="panel-line"><span>Material mais caro</span><span>${priciestMaterial ? esc(priciestMaterial.name) + " · " + fmtBRL(materialUnitCost(priciestMaterial)) + "/" + esc(priciestMaterial.unit) : "—"}</span></div>
-        <div class="panel-line"><span>Fórmula mais cara</span><span>${priciestFormula && formulaCostPerMl(priciestFormula) > 0 ? esc(priciestFormula.name) + " · " + fmtBRL(formulaCostPerMl(priciestFormula) * 100) + "/100ml" : "—"}</span></div>
-        <div class="panel-line"><span>Perfume mais caro</span><span>${priciestPerfume && priciestPerfume.cost > 0 ? esc(priciestPerfume.p.name) + " · " + fmtBRL(priciestPerfume.cost) : "—"}</span></div>
-        <div class="panel-line"><span>Próxima avaliação de maceração</span><span>${nextReady ? esc(nextReady.label) + " · " + esc(nextReady.info.label) : "nada em maceração"}</span></div>
-      </div>
-      <div class="panel-block">
-        <div class="panel-block-title">Materiais abaixo do mínimo</div>
-        ${lowStock.length === 0
-          ? `<div class="log-empty">Tudo dentro do estoque mínimo. ✓</div>`
-          : lowStock.map((it) => `<div class="panel-line"><span>⚠ ${esc(it.name)}</span><span class="low-tag">${fmt(it.quantity)}${esc(it.unit)} · mín. ${fmt(it.minStock)}${esc(it.unit)}</span></div>`).join("")}
-      </div>
-    </div>
-  `;
-}
-
-function wirePainelShell() {
-  // painel é somente leitura, sem eventos delegados por enquanto
+  else if (state.tab === "lotes") { el.innerHTML = lotesShellHtml(); wireLotesShell(); }
 }
 
 /* ------------------------------ ESTOQUE TAB -------------------------------- */
 
-function lowStockAlertHtml() {
-  const low = state.items.filter((it) => it.minStock != null && it.quantity < it.minStock);
-  if (low.length === 0) return "";
-  return `
-    <div class="alert-banner">
-      <div class="alert-banner-title">⚠ Abaixo do mínimo</div>
-      <div class="alert-banner-list">
-        ${low.map((it) => `<span class="alert-chip">${esc(it.name)} · ${fmt(it.quantity)}${esc(it.unit)} (mín. ${fmt(it.minStock)}${esc(it.unit)})</span>`).join("")}
-      </div>
-    </div>`;
-}
-
 function estoqueShellHtml() {
   return `
-    <div id="lowStockAlert">${lowStockAlertHtml()}</div>
     <div class="spectrum" id="spectrum"></div>
     <div class="controls">
       <div class="controls-row">
@@ -913,8 +754,6 @@ function getFilteredMaterials() {
 
 function updateMaterialsList() {
   renderSpectrum();
-  const alertEl = document.getElementById("lowStockAlert");
-  if (alertEl) alertEl.innerHTML = lowStockAlertHtml();
   const el = document.getElementById("materialsGroups");
   if (!el) return;
   const filtered = getFilteredMaterials();
@@ -971,13 +810,13 @@ function materialCardHtml(it, f) {
         </div>
         <div class="card-qty">${fmt(it.quantity)} <span style="color:var(--ash);font-size:12px;">${esc(it.unit)}</span></div>
         ${it.minStock != null ? `<div class="card-min ${low ? "low" : ""}">mínimo: ${fmt(it.minStock)} ${esc(it.unit)}</div>` : ""}
+        ${unitCost(it) != null ? `<div style="font-size:11px;color:var(--gold);font-family:'JetBrains Mono',monospace;">${brl(unitCost(it))}/${esc(it.unit)}</div>` : ""}
         <div class="card-meta">
           ${it.solvent ? `<span>Diluente: ${esc(it.solvent)}</span>` : ""}
           ${it.cas ? `<span style="font-family:'JetBrains Mono',monospace">CAS ${esc(it.cas)}</span>` : ""}
           ${it.supplier ? `<span>${esc(it.supplier)}</span>` : ""}
         </div>
         ${it.notes ? `<div class="card-notes">${esc(it.notes)}</div>` : ""}
-        ${materialHasCost(it) ? `<div class="card-cost">${fmtBRL(materialUnitCost(it))}/${esc(it.unit)}</div>` : ""}
         <div class="card-actions">
           <button class="btn-text" data-action="edit-material" data-id="${it.id}">editar</button>
           <button class="btn-text danger" data-action="delete-material" data-id="${it.id}">remover</button>
@@ -1077,29 +916,20 @@ function openMaterialModal(editId, presetFamily) {
         <label class="label">Fornecedor</label>
         <input class="input" id="f-supplier" value="${editing ? esc(editing.supplier) : ""}" placeholder="Ex: euperfumista, Perfumoteca, Laszlo" />
 
-        <div class="cost-fieldset">
-          <div class="cost-fieldset-title">Custo (MÓDULO 13)</div>
-          <div class="row2">
-            <div>
-              <label class="label" style="margin-top:0;">Preço pago (R$)</label>
-              <input class="input" id="f-pricePaid" type="number" step="0.01" value="${editing && editing.pricePaid != null ? editing.pricePaid : ""}" placeholder="Ex: 120,00" />
-            </div>
-            <div>
-              <label class="label" style="margin-top:0;">Quantidade comprada (${"" /* unidade abaixo */}<span id="f-purchaseUnitLabel">${editing ? esc(editing.unit) : "g"}</span>)</label>
-              <input class="input" id="f-quantityPurchased" type="number" step="0.01" value="${editing && editing.quantityPurchased != null ? editing.quantityPurchased : ""}" placeholder="Ex: 250" />
-            </div>
+        <label class="label" style="margin-top:16px;">Custo (opcional)</label>
+        <div class="row2">
+          <div>
+            <label class="label" style="margin-top:0;">Preço pago (R$)</label>
+            <input class="input" id="f-pricePaid" type="number" step="0.01" value="${editing && editing.pricePaid != null ? editing.pricePaid : ""}" placeholder="Ex: 120,00" />
           </div>
-          <div class="row2">
-            <div>
-              <label class="label">Data da compra</label>
-              <input class="input" id="f-purchaseDate" type="date" value="${editing && editing.purchaseDate ? editing.purchaseDate : ""}" />
-            </div>
-            <div>
-              <label class="label">Custo unitário (calculado)</label>
-              <div class="input" id="f-unitCostPreview" style="display:flex;align-items:center;color:var(--gold);">${editing && materialHasCost(editing) ? fmtBRL(materialUnitCost(editing)) + "/" + esc(editing.unit) : "—"}</div>
-            </div>
+          <div>
+            <label class="label" style="margin-top:0;">Quantidade comprada</label>
+            <input class="input" id="f-purchaseQty" type="number" step="0.01" value="${editing && editing.purchaseQuantity != null ? editing.purchaseQuantity : ""}" placeholder="Ex: 250" />
           </div>
         </div>
+        <label class="label">Data da compra</label>
+        <input class="input" id="f-purchaseDate" type="date" value="${editing && editing.purchaseDate ? editing.purchaseDate : ""}" />
+        <div id="unitCostPreview" style="font-size:12px;color:var(--gold);margin-top:6px;"></div>
 
         <label class="label">Notas</label>
         <textarea class="input" id="f-notes" style="min-height:60px;resize:vertical;">${editing ? esc(editing.notes) : ""}</textarea>
@@ -1143,22 +973,20 @@ function openMaterialModal(editId, presetFamily) {
   });
 
   const updateCostPreview = () => {
-    const paid = parseFloat(document.getElementById("f-pricePaid").value);
-    const qty = parseFloat(document.getElementById("f-quantityPurchased").value);
-    const unit = document.getElementById("f-unit").value;
-    const preview = document.getElementById("f-unitCostPreview");
-    if (Number.isFinite(paid) && Number.isFinite(qty) && qty > 0) {
-      preview.textContent = fmtBRL(paid / qty) + "/" + unit;
+    const price = parseFloat(document.getElementById("f-pricePaid").value);
+    const qty = parseFloat(document.getElementById("f-purchaseQty").value);
+    const preview = document.getElementById("unitCostPreview");
+    if (Number.isFinite(price) && Number.isFinite(qty) && qty > 0) {
+      const unit = document.getElementById("f-unit").value;
+      preview.textContent = `Custo unitário calculado: ${brl(price / qty)}/${unit}`;
     } else {
-      preview.textContent = "—";
+      preview.textContent = "";
     }
   };
   document.getElementById("f-pricePaid").addEventListener("input", updateCostPreview);
-  document.getElementById("f-quantityPurchased").addEventListener("input", updateCostPreview);
-  document.getElementById("f-unit").addEventListener("change", (e) => {
-    document.getElementById("f-purchaseUnitLabel").textContent = e.target.value;
-    updateCostPreview();
-  });
+  document.getElementById("f-purchaseQty").addEventListener("input", updateCostPreview);
+  document.getElementById("f-unit").addEventListener("change", updateCostPreview);
+  updateCostPreview();
 
   document.getElementById("materialForm").addEventListener("submit", async (e) => {
     e.preventDefault();
@@ -1187,7 +1015,7 @@ function openMaterialModal(editId, presetFamily) {
       supplier: document.getElementById("f-supplier").value.trim(),
       notes: document.getElementById("f-notes").value.trim(),
       pricePaid: document.getElementById("f-pricePaid").value === "" ? null : parseFloat(document.getElementById("f-pricePaid").value),
-      quantityPurchased: document.getElementById("f-quantityPurchased").value === "" ? null : parseFloat(document.getElementById("f-quantityPurchased").value),
+      purchaseQuantity: document.getElementById("f-purchaseQty").value === "" ? null : parseFloat(document.getElementById("f-purchaseQty").value),
       purchaseDate: document.getElementById("f-purchaseDate").value || null,
     };
 
@@ -1224,12 +1052,14 @@ function delegatedFormulasClicks(e) {
   if (action === "new-formula") openFormulaModal(null);
   else if (action === "edit-formula") openFormulaModal(btn.dataset.id);
   else if (action === "delete-formula") handleDeleteFormula(btn.dataset.id);
-  else if (action === "produce-batch") openProduceBatchModal(btn.dataset.id);
   else if (action === "toggle-calc") {
     const id = btn.dataset.id;
     calcState[id] = calcState[id] || { open: false, batchSize: "10", concPct: btn.dataset.defaultpct };
     calcState[id].open = !calcState[id].open;
     renderFormulasGrid();
+  } else if (action === "produce-lote") {
+    const formula = state.formulas.find((f) => f.id === btn.dataset.id);
+    if (formula) openLoteModal(formula);
   }
 }
 
@@ -1307,7 +1137,7 @@ function formulaCardHtml(formula, number) {
         <span class="${totalOk ? "total-ok" : "total-warn"}">total ${fmt(totalPct)}% ${!totalOk ? "· ajustar p/ 100%" : ""}</span>
       </div>
       <div class="mat-list">${matListHtml}</div>
-      ${formulaCostBoxHtml(formula)}
+      ${costTableHtml(formula)}
       <button class="calc-toggle" data-action="toggle-calc" data-id="${formula.id}" data-defaultpct="${formula.concentrationPct}">${cs.open ? "▾" : "▸"} calculadora de lote</button>
       <div class="calc-box ${cs.open ? "" : "hidden"}" id="calcBox-${formula.id}">
         <div class="calc-inputs">
@@ -1324,25 +1154,22 @@ function formulaCardHtml(formula, number) {
           <button class="btn-text" data-action="edit-formula" data-id="${formula.id}">editar</button>
           <button class="btn-text danger" data-action="delete-formula" data-id="${formula.id}">remover</button>
         </div>
-        <button class="btn-primary small" data-action="produce-batch" data-id="${formula.id}">Produzir lote</button>
+        <button class="btn-ghost small" data-action="produce-lote" data-id="${formula.id}">Produzir lote</button>
       </div>
     </div>`;
 }
 
-// MÓDULO 15 (custo por volume) + MÓDULO 12 (produção máxima possível)
-function formulaCostBoxHtml(formula) {
-  const perMl = formulaCostPerMl(formula);
-  const incomplete = formulaCostIncomplete(formula);
-  const { max, limiting } = formulaMaxBatch(formula);
+function costTableHtml(formula) {
+  const info = formulaCostInfo(formula);
   const volumes = [4, 10, 30, 50, 100];
-  if (perMl <= 0 && !incomplete) return "";
+  const rows = volumes.map((v) => `<div class="calc-result-row"><span style="color:var(--ash)">${v}ml</span><span>${brl(info.costPerFinishedMl * v)}</span></div>`).join("");
   return `
     <div class="cost-box">
-      <div class="cost-box-title">Custo da fórmula ${incomplete ? '<span class="cost-incomplete">· custo incompleto (falta preço de compra em algum material)</span>' : ""}</div>
-      <div class="cost-vols">
-        ${volumes.map((v) => `<div class="cost-vol"><span>${v}ml</span><span>${fmtBRL(perMl * v)}</span></div>`).join("")}
+      <div class="label" style="margin-top:0;display:flex;justify-content:space-between;">
+        <span>Custo estimado</span>
+        ${info.missingCount > 0 ? `<span style="color:var(--ash-dim);font-weight:400;">parcial · ${info.missingCount} sem preço</span>` : ""}
       </div>
-      ${max != null ? `<div class="calc-note">produção máxima possível: <strong style="color:var(--gold)">${fmt(max)} ml</strong> — limitado por ${esc(limiting)}</div>` : ""}
+      ${rows}
     </div>`;
 }
 
@@ -1510,105 +1337,6 @@ function openFormulaModal(editId) {
   });
 }
 
-/* --------------------------- MODAL: PRODUZIR LOTE (MÓDULOS 1-4) ------------ */
-
-function openProduceBatchModal(formulaId) {
-  const formula = state.formulas.find((f) => f.id === formulaId);
-  if (!formula) return;
-  const { max } = formulaMaxBatch(formula);
-
-  const root = document.getElementById("modalRoot");
-  root.innerHTML = `
-    <div class="overlay" id="overlay">
-      <form class="modal" id="batchForm">
-        <div class="modal-title">Produzir lote: ${esc(formula.name)}</div>
-        ${max != null ? `<div class="calc-note" style="margin-bottom:10px;">produção máxima possível com o estoque atual: <strong style="color:var(--gold)">${fmt(max)} ml</strong></div>` : ""}
-
-        <label class="label" style="margin-top:0;">Quantidade desejada (ml)</label>
-        <input class="input" id="pb-quantity" type="number" step="0.1" value="${max != null && max > 0 ? Math.min(100, Math.floor(max)) : 100}" />
-
-        <label class="label">Tipo</label>
-        <select class="input" id="pb-type">
-          <option value="teste">Teste</option>
-          <option value="producao">Produção</option>
-        </select>
-
-        <label class="label">Maceração</label>
-        <select class="input" id="pb-maturation">
-          <option value="15">15 dias</option>
-          <option value="30" selected>30 dias</option>
-          <option value="45">45 dias</option>
-          <option value="60">60 dias</option>
-          <option value="custom">Outro</option>
-        </select>
-        <input class="input" id="pb-maturationCustom" type="number" step="1" style="display:none;margin-top:6px;" placeholder="dias" />
-
-        <label class="label">Observações</label>
-        <textarea class="input" id="pb-notes" style="min-height:60px;resize:vertical;"></textarea>
-
-        <div id="pb-preview"></div>
-        <div class="form-error" id="batchFormError" style="display:none;"></div>
-
-        <div class="modal-actions">
-          <button type="button" class="btn-ghost" data-action="close-modal">Cancelar</button>
-          <button type="submit" class="btn-primary">Confirmar produção</button>
-        </div>
-      </form>
-    </div>`;
-
-  document.getElementById("overlay").addEventListener("click", (e) => { if (e.target.id === "overlay") closeModal(); });
-  document.getElementById("batchForm").addEventListener("click", (e) => e.stopPropagation());
-  root.querySelector('[data-action="close-modal"]').addEventListener("click", closeModal);
-
-  document.getElementById("pb-maturation").addEventListener("change", (e) => {
-    document.getElementById("pb-maturationCustom").style.display = e.target.value === "custom" ? "" : "none";
-  });
-
-  const updatePreview = () => {
-    const qty = parseFloat(document.getElementById("pb-quantity").value) || 0;
-    const needs = computeFormulaNeeds(formula, qty, formula.concentrationPct);
-    const totalCost = needs.reduce((a, n) => a + n.cost, 0);
-    document.getElementById("pb-preview").innerHTML = `
-      <div class="cost-box" style="margin-top:4px;">
-        <div class="cost-box-title">MÓDULO 2 — cálculo automático dos ingredientes</div>
-        ${needs.map((n) => `<div class="calc-result-row"><span style="color:var(--ash)">${esc(n.name)}</span><span class="${n.materialId && n.available != null && n.available < n.needed ? "insufficient" : ""}">${fmt(n.needed)}${esc(n.unit)}${n.materialId && n.available != null ? " · tem " + fmt(n.available) + esc(n.unit) : ""}</span></div>`).join("")}
-        <div class="calc-result-row" style="border-top:1px solid var(--hair-soft);padding-top:6px;"><span>custo total estimado</span><span>${fmtBRL(totalCost)}</span></div>
-      </div>`;
-  };
-  document.getElementById("pb-quantity").addEventListener("input", updatePreview);
-  updatePreview();
-
-  document.getElementById("batchForm").addEventListener("submit", async (e) => {
-    e.preventDefault();
-    const errEl = document.getElementById("batchFormError");
-    const quantityMl = parseFloat(document.getElementById("pb-quantity").value) || 0;
-    if (quantityMl <= 0) { errEl.textContent = "Informa uma quantidade válida."; errEl.style.display = "block"; return; }
-    const maturationSel = document.getElementById("pb-maturation").value;
-    const maturationDays = maturationSel === "custom" ? parseFloat(document.getElementById("pb-maturationCustom").value) || 30 : parseFloat(maturationSel);
-    const batchType = document.getElementById("pb-type").value;
-    const notes = document.getElementById("pb-notes").value.trim();
-
-    const result = await produceBatch(formula, { quantityMl, batchType, maturationDays, notes });
-    if (!result.ok) {
-      if (result.shortages.length > 0) {
-        errEl.innerHTML =
-          `<strong>Estoque insuficiente.</strong><br>` +
-          result.shortages.map((s) => `${esc(s.name)}: necessário ${fmt(s.needed)}${esc(s.unit)}, disponível ${fmt(s.available)}${esc(s.unit)}`).join("<br>");
-        errEl.style.display = "block";
-      } else {
-        errEl.textContent = "Não consegui produzir o lote. Tenta de novo.";
-        errEl.style.display = "block";
-      }
-      return;
-    }
-    closeModal();
-    renderFormulasGrid();
-    let msg = `Lote ${result.batch.code} produzido — estoque atualizado.`;
-    if (result.lowStockHits.length > 0) msg += ` ⚠ Abaixo do mínimo: ${result.lowStockHits.join(", ")}.`;
-    showToast(msg, true);
-  });
-}
-
 function inventoryOptionsHtml(selectedId) {
   let html = `<option value="">— digitar manualmente —</option>`;
   FAMILIES.forEach((fam) => {
@@ -1689,6 +1417,323 @@ function renderFormulaRows() {
   });
 }
 
+/* -------------------------------- LOTES TAB --------------------------------- */
+
+function lotesShellHtml() {
+  return `
+    <div class="form-header">
+      <span class="form-count">${state.lotes.length} lote${state.lotes.length === 1 ? "" : "s"} produzido${state.lotes.length === 1 ? "" : "s"}</span>
+    </div>
+    <div id="lotesGrid"></div>
+    <section class="fam-section">
+      <button class="fam-header" data-action="toggle-movements">
+        <span class="fam-title">Movimentações de estoque</span>
+        <span style="color:var(--ash);font-size:12px;">${state.collapsed.movements ? "mostrar" : "ocultar"}</span>
+      </button>
+      <div id="movementsSection"></div>
+    </section>
+  `;
+}
+
+function wireLotesShell() {
+  document.getElementById("tabContent").addEventListener("click", delegatedLotesClicks);
+  document.getElementById("tabContent").addEventListener("submit", (e) => e.preventDefault());
+  renderLotesGrid();
+  renderMovementsSection();
+}
+
+function delegatedLotesClicks(e) {
+  const btn = e.target.closest("[data-action]");
+  if (!btn) return;
+  const action = btn.dataset.action;
+  if (action === "delete-lote") handleDeleteLote(btn.dataset.id);
+  else if (action === "add-lote-log") handleAddLog("lote", btn.dataset.id);
+  else if (action === "toggle-movements") {
+    state.collapsed.movements = !state.collapsed.movements;
+    renderTabContent();
+  } else if (action === "new-movement") openMovementModal();
+}
+
+function renderLotesGrid() {
+  const el = document.getElementById("lotesGrid");
+  if (!el) return;
+  const sorted = [...state.lotes].sort((a, b) => b.createdAt - a.createdAt);
+  if (sorted.length === 0) {
+    el.innerHTML = `
+      <div class="empty">
+        <div class="empty-title">Nenhum lote produzido ainda</div>
+        <div class="empty-sub">Vai na aba Fórmulas e clica em "Produzir lote" numa criação — o sistema calcula os ingredientes, valida o estoque e desconta automaticamente.</div>
+      </div>`;
+    return;
+  }
+  el.innerHTML = `<div class="forms-grid">${sorted.map((l) => loteCardHtml(l)).join("")}</div>`;
+}
+
+function loteCardHtml(l) {
+  const info = maturityInfo(l.createdAt, l.maturationDays);
+  const consumedHtml = l.consumed.map((c) => `<div class="mat-row"><span class="mat-name">${esc(c.name)}</span><span class="mat-pct">${fmt(c.quantity)}${esc(c.unit)}</span></div>`).join("");
+  return `
+    <div class="fcard">
+      <div class="fcard-eyebrow">
+        <span class="fcard-num">${esc(l.code)}</span>
+        <span class="fcard-type">${l.type === "producao" ? "Produção" : "Teste"} · ${fmt(l.volumeMl)}ml</span>
+      </div>
+      <div class="fcard-name">${esc(l.formulaName)}</div>
+      <div style="font-size:11px;color:var(--ash-dim);">criado em ${esc(formatDateBR(new Date(l.createdAt).toISOString()))} · ${l.maturationDays}d de maceração</div>
+      ${maturityBarHtml(info)}
+      <div class="label" style="margin-top:0;">Materiais consumidos</div>
+      <div class="mat-list">${consumedHtml}</div>
+      ${l.notes ? `<div class="card-notes">${esc(l.notes)}</div>` : ""}
+      <div class="log-section">
+        <div class="label" style="margin-top:0;">Evolução do lote</div>
+        ${logListHtml(l.log)}
+        <form class="log-form">
+          <input type="text" class="input" placeholder="Como tá hoje?" id="logNote-lote-${l.id}" />
+          <button type="button" class="btn-ghost small" data-action="add-lote-log" data-id="${l.id}">+ registrar</button>
+        </form>
+      </div>
+      <div class="fcard-actions">
+        <div class="fcard-actions-left">
+          <button class="btn-text danger" data-action="delete-lote" data-id="${l.id}">remover</button>
+        </div>
+      </div>
+    </div>`;
+}
+
+async function handleDeleteLote(id) {
+  if (!confirm("Remover esse lote? Isso NÃO devolve o estoque consumido automaticamente.")) return;
+  await deleteLote(id);
+  renderLotesGrid();
+}
+
+function renderMovementsSection() {
+  const el = document.getElementById("movementsSection");
+  if (!el) return;
+  if (state.collapsed.movements) { el.innerHTML = ""; return; }
+  const rows = state.movements
+    .slice(0, 100)
+    .map((m) => {
+      const typeLabel = { entrada: "Entrada", saida: "Saída", ajuste: "Ajuste" }[m.type] || m.type;
+      const sign = m.type === "saida" ? "-" : m.type === "entrada" ? "+" : m.quantity >= 0 ? "+" : "";
+      return `
+        <div class="mov-row">
+          <span class="mov-date">${esc(formatDateBR(new Date(m.createdAt).toISOString()))}</span>
+          <span class="mov-material">${esc(m.materialName)}</span>
+          <span class="mov-type mov-type-${m.type}">${esc(typeLabel)}</span>
+          <span class="mov-qty">${sign}${fmt(Math.abs(m.quantity))}${esc(m.unit)}</span>
+          <span class="mov-origin">${esc(m.origin)}</span>
+        </div>`;
+    })
+    .join("");
+  el.innerHTML = `
+    <div style="margin-top:14px;">
+      <button class="btn-ghost small" data-action="new-movement">+ Registrar movimentação manual</button>
+      <div class="mov-list">
+        ${rows || '<div class="log-empty">Nenhuma movimentação registrada ainda.</div>'}
+      </div>
+    </div>`;
+}
+
+/* ----------------------------- MODAL: PRODUZIR LOTE ------------------------- */
+
+function openLoteModal(formula) {
+  const root = document.getElementById("modalRoot");
+  root.innerHTML = `
+    <div class="overlay" id="overlay">
+      <form class="modal" id="loteForm">
+        <div class="modal-title">Produzir lote de ${esc(formula.name)}</div>
+
+        <label class="label">Quantidade desejada (ml)</label>
+        <input class="input" id="lt-volume" type="number" step="0.1" value="100" />
+
+        <label class="label">Tipo</label>
+        <div class="row2">
+          <label style="display:flex;align-items:center;gap:6px;font-size:13px;"><input type="radio" name="lt-type" value="teste" checked /> Teste</label>
+          <label style="display:flex;align-items:center;gap:6px;font-size:13px;"><input type="radio" name="lt-type" value="producao" /> Produção</label>
+        </div>
+
+        <label class="label">Maceração</label>
+        <select class="input" id="lt-maturation">
+          <option value="15">15 dias</option>
+          <option value="30">30 dias</option>
+          <option value="45">45 dias</option>
+          <option value="60">60 dias</option>
+          <option value="custom">Outro prazo</option>
+        </select>
+        <div id="lt-customWrap" style="display:none;margin-top:8px;">
+          <input class="input" id="lt-customDays" type="number" step="1" placeholder="Dias" />
+        </div>
+
+        <label class="label">Observações</label>
+        <textarea class="input" id="lt-notes" style="min-height:50px;resize:vertical;"></textarea>
+
+        <div id="ltPreview" style="margin-top:14px;"></div>
+        <div class="form-error" id="loteFormError" style="display:none;"></div>
+
+        <div class="modal-actions">
+          <button type="button" class="btn-ghost" data-action="close-modal">Cancelar</button>
+          <button type="submit" class="btn-primary" id="loteConfirmBtn">Confirmar produção</button>
+        </div>
+      </form>
+    </div>`;
+
+  document.getElementById("overlay").addEventListener("click", (e) => { if (e.target.id === "overlay") closeModal(); });
+  document.getElementById("loteForm").addEventListener("click", (e) => e.stopPropagation());
+  root.querySelector('[data-action="close-modal"]').addEventListener("click", closeModal);
+
+  document.getElementById("lt-maturation").addEventListener("change", (e) => {
+    document.getElementById("lt-customWrap").style.display = e.target.value === "custom" ? "" : "none";
+    updateLotePreview();
+  });
+  document.getElementById("lt-volume").addEventListener("input", updateLotePreview);
+
+  function currentMaturationDays() {
+    const sel = document.getElementById("lt-maturation").value;
+    if (sel === "custom") return parseFloat(document.getElementById("lt-customDays").value) || 15;
+    return parseFloat(sel);
+  }
+
+  function updateLotePreview() {
+    const volume = parseFloat(document.getElementById("lt-volume").value) || 0;
+    const { rows } = computeLoteRequirements(formula, volume);
+    const unlinked = rows.filter((r) => !r.linked);
+    const insufficient = rows.filter((r) => r.linked && !r.ok);
+    const allOk = unlinked.length === 0 && insufficient.length === 0;
+
+    const rowsHtml = rows
+      .map((r) => {
+        const status = !r.linked ? "não vinculado ao estoque" : r.ok ? "ok" : "insuficiente";
+        const statusColor = !r.linked ? "var(--danger)" : r.ok ? "var(--ok)" : "var(--danger)";
+        return `
+          <div class="calc-result-row">
+            <span style="color:var(--ash)">${esc(r.name)}</span>
+            <span>necessário ${fmt(r.needed)}${esc(r.unit)} · disponível ${r.linked ? fmt(r.available) + esc(r.unit) : "—"}</span>
+          </div>
+          <div style="font-size:10.5px;color:${statusColor};margin-top:-4px;margin-bottom:2px;">${status}</div>`;
+      })
+      .join("");
+
+    document.getElementById("ltPreview").innerHTML = `
+      <div class="calc-box">
+        <div class="label" style="margin-top:0;">Ingredientes necessários</div>
+        ${rowsHtml}
+      </div>
+      ${!allOk ? `<div class="form-error" style="margin-top:10px;">${unlinked.length > 0 ? "Estoque insuficiente: há material(is) da fórmula sem vínculo com o estoque — edita a fórmula e liga ao estoque antes de produzir. " : ""}${insufficient.length > 0 ? "Estoque insuficiente para um ou mais materiais — não é possível produzir parcialmente." : ""}</div>` : ""}
+    `;
+    document.getElementById("loteConfirmBtn").disabled = !allOk;
+    document.getElementById("loteConfirmBtn").style.opacity = allOk ? "1" : "0.5";
+  }
+  updateLotePreview();
+
+  document.getElementById("loteForm").addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const volume = parseFloat(document.getElementById("lt-volume").value) || 0;
+    const type = document.querySelector('input[name="lt-type"]:checked').value;
+    const errEl = document.getElementById("loteFormError");
+    if (volume <= 0) { errEl.textContent = "Informa uma quantidade válida."; errEl.style.display = "block"; return; }
+    errEl.style.display = "none";
+
+    const result = await produceLote({
+      formula,
+      volumeMl: volume,
+      type,
+      maturationDays: currentMaturationDays(),
+      notes: document.getElementById("lt-notes").value.trim(),
+    });
+
+    if (!result.ok) {
+      updateLotePreview();
+      errEl.textContent = "Não foi possível produzir — confere o estoque acima.";
+      errEl.style.display = "block";
+      return;
+    }
+    closeModal();
+    showToast(`Lote ${result.lote.code} produzido e estoque atualizado.`, true);
+    if (state.tab === "lotes") renderLotesGrid();
+    if (state.tab === "estoque") updateMaterialsList();
+  });
+}
+
+/* ----------------------------- MODAL: MOVIMENTAÇÃO -------------------------- */
+
+function openMovementModal() {
+  const root = document.getElementById("modalRoot");
+  root.innerHTML = `
+    <div class="overlay" id="overlay">
+      <form class="modal" id="movementForm">
+        <div class="modal-title">Registrar movimentação</div>
+
+        <label class="label">Material</label>
+        <select class="input" id="mv-material">
+          ${state.items.map((it) => `<option value="${it.id}">${esc(it.name)} — ${fmt(it.quantity)}${esc(it.unit)} em estoque</option>`).join("")}
+        </select>
+
+        <label class="label">Tipo</label>
+        <select class="input" id="mv-type">
+          <option value="entrada">Entrada</option>
+          <option value="saida">Saída</option>
+          <option value="ajuste">Ajuste (correção)</option>
+        </select>
+
+        <label class="label" id="mv-qtyLabel">Quantidade</label>
+        <input class="input" id="mv-quantity" type="number" step="0.01" />
+        <div style="font-size:10.5px;color:var(--ash-dim);margin-top:4px;" id="mv-qtyHint"></div>
+
+        <label class="label">Origem</label>
+        <input class="input" id="mv-origin" placeholder="Ex: Compra, correção de contagem" />
+
+        <label class="label">Observação</label>
+        <input class="input" id="mv-notes" />
+
+        <div class="form-error" id="movementFormError" style="display:none;"></div>
+
+        <div class="modal-actions">
+          <button type="button" class="btn-ghost" data-action="close-modal">Cancelar</button>
+          <button type="submit" class="btn-primary">Registrar</button>
+        </div>
+      </form>
+    </div>`;
+
+  document.getElementById("overlay").addEventListener("click", (e) => { if (e.target.id === "overlay") closeModal(); });
+  document.getElementById("movementForm").addEventListener("click", (e) => e.stopPropagation());
+  root.querySelector('[data-action="close-modal"]').addEventListener("click", closeModal);
+
+  document.getElementById("mv-type").addEventListener("change", (e) => {
+    document.getElementById("mv-qtyHint").textContent =
+      e.target.value === "ajuste" ? "Pode ser negativo (ex: -5 pra corrigir uma contagem menor)." : "";
+  });
+
+  document.getElementById("movementForm").addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const materialId = document.getElementById("mv-material").value;
+    const type = document.getElementById("mv-type").value;
+    const quantity = parseFloat(document.getElementById("mv-quantity").value);
+    const errEl = document.getElementById("movementFormError");
+    if (!materialId) { errEl.textContent = "Escolhe um material."; errEl.style.display = "block"; return; }
+    if (!Number.isFinite(quantity) || (type !== "ajuste" && quantity <= 0)) {
+      errEl.textContent = "Informa uma quantidade válida.";
+      errEl.style.display = "block";
+      return;
+    }
+    const result = await registerManualMovement({
+      materialId,
+      type,
+      quantity,
+      origin: document.getElementById("mv-origin").value.trim(),
+      notes: document.getElementById("mv-notes").value.trim(),
+    });
+    if (!result.ok) {
+      errEl.textContent = result.reason === "insufficient" ? `Estoque insuficiente (disponível: ${fmt(result.available)}).` : "Não consegui registrar a movimentação.";
+      errEl.style.display = "block";
+      return;
+    }
+    closeModal();
+    showToast("Movimentação registrada.", true);
+    renderMovementsSection();
+    if (state.tab === "estoque") updateMaterialsList();
+  });
+}
+
 /* -------------------------------- MATURAÇÃO UI ------------------------------ */
 
 function maturityBarHtml(info) {
@@ -1711,106 +1756,6 @@ function formatDateBR(iso) {
   const d = new Date(iso);
   if (isNaN(d.getTime())) return iso;
   return d.toLocaleDateString("pt-BR");
-}
-
-/* -------------------------------- LOTES TAB --------------------------------- */
-/* MÓDULOS 1, 9, 10, 11, 16 — lista de lotes, maceração automática, evolução, custo */
-
-const BATCH_STATUS = [
-  { key: "macerando", label: "Macerando" },
-  { key: "pronto", label: "Pronto" },
-  { key: "entregue", label: "Entregue" },
-];
-
-function lotesShellHtml() {
-  return `
-    <div class="form-header">
-      <span class="form-count">${state.batches.length} lote${state.batches.length === 1 ? "" : "s"} registrado${state.batches.length === 1 ? "" : "s"}</span>
-    </div>
-    <div id="batchesGrid"></div>
-  `;
-}
-
-function wireLotesShell() {
-  document.getElementById("tabContent").addEventListener("click", delegatedLotesClicks);
-  document.getElementById("tabContent").addEventListener("submit", (e) => e.preventDefault());
-  renderBatchesGrid();
-}
-
-function delegatedLotesClicks(e) {
-  const btn = e.target.closest("[data-action]");
-  if (!btn) return;
-  const action = btn.dataset.action;
-  if (action === "delete-batch") handleDeleteBatch(btn.dataset.id);
-  else if (action === "add-batch-log") handleAddLog("batch", btn.dataset.id);
-  else if (action === "set-batch-status") handleSetBatchStatus(btn.dataset.id, btn.dataset.status);
-}
-
-function renderBatchesGrid() {
-  const el = document.getElementById("batchesGrid");
-  if (!el) return;
-  const sorted = [...state.batches].sort((a, b) => b.createdAt - a.createdAt);
-  if (sorted.length === 0) {
-    el.innerHTML = `
-      <div class="empty">
-        <div class="empty-title">Nenhum lote produzido ainda</div>
-        <div class="empty-sub">Vai na aba Fórmulas e clica em "Produzir lote" pra dar baixa automática no estoque e começar a maceração.</div>
-      </div>`;
-    return;
-  }
-  el.innerHTML = `<div class="forms-grid">${sorted.map((b) => batchCardHtml(b)).join("")}</div>`;
-}
-
-function batchCardHtml(b) {
-  const formula = state.formulas.find((f) => f.id === b.formulaId);
-  const info = maturityInfo(b.createdAt, b.maturationDays);
-  const ingredientsHtml = b.ingredients
-    .map((n) => `<div class="mat-row"><span class="mat-name">${esc(n.name)}</span><span class="mat-pct">${fmt(n.needed)}${esc(n.unit)}</span></div>`)
-    .join("");
-  return `
-    <div class="fcard">
-      <div class="fcard-eyebrow">
-        <span class="fcard-num">${esc(b.code)}</span>
-        <span class="fcard-type">${b.batchType === "producao" ? "Produção" : "Teste"} · ${fmt(b.quantityMl)}ml</span>
-      </div>
-      <div class="fcard-name">${esc(formula ? formula.name : "(fórmula removida)")}</div>
-      <div class="status-row">
-        ${BATCH_STATUS.map((s) => `<button type="button" class="status-chip ${b.status === s.key ? "active" : ""}" data-action="set-batch-status" data-id="${b.id}" data-status="${s.key}">${esc(s.label)}</button>`).join("")}
-      </div>
-      ${maturityBarHtml(info)}
-      <div class="mat-list">${ingredientsHtml}</div>
-      <div class="cost-box">
-        <div class="calc-result-row"><span>custo total</span><span>${fmtBRL(b.totalCost)}</span></div>
-        <div class="calc-result-row"><span>custo por ml</span><span>${fmtBRL(b.costPerMl)}</span></div>
-      </div>
-      ${b.notes ? `<div class="card-notes">${esc(b.notes)}</div>` : ""}
-      <div class="log-section">
-        <div class="label" style="margin-top:0;">Evolução do lote</div>
-        ${logListHtml(b.log)}
-        <form class="log-form" data-log-form="batch-${b.id}">
-          <input type="text" class="input" placeholder="Ex: mais cítrico do que esperado" id="logNote-batch-${b.id}" />
-          <button type="submit" class="btn-ghost small" data-action="add-batch-log" data-id="${b.id}">+ registrar</button>
-        </form>
-      </div>
-      <div class="fcard-actions">
-        <div class="fcard-actions-left">
-          <button class="btn-text danger" data-action="delete-batch" data-id="${b.id}">remover</button>
-        </div>
-      </div>
-    </div>`;
-}
-
-async function handleSetBatchStatus(id, status) {
-  const b = state.batches.find((x) => x.id === id);
-  if (!b) return;
-  await updateBatch(id, { ...b, status });
-  renderBatchesGrid();
-}
-
-async function handleDeleteBatch(id) {
-  if (!confirm("Remover esse lote? Isso não devolve o material ao estoque.")) return;
-  await deleteBatch(id);
-  renderBatchesGrid();
 }
 
 /* -------------------------------- ACORDES TAB ------------------------------- */
@@ -1906,18 +1851,18 @@ async function handleAddLog(type, id) {
     const record = { ...item, log: [...item.log, entry] };
     await updateAccord(id, record);
     renderAccordsGrid();
-  } else if (type === "batch") {
-    const item = state.batches.find((b) => b.id === id);
-    if (!item) return;
-    const record = { ...item, log: [...item.log, entry] };
-    await updateBatch(id, record);
-    renderBatchesGrid();
-  } else {
+  } else if (type === "perfume") {
     const item = state.perfumes.find((p) => p.id === id);
     if (!item) return;
     const record = { ...item, log: [...item.log, entry] };
     await updatePerfume(id, record);
     renderPerfumesGrid();
+  } else if (type === "lote") {
+    const item = state.lotes.find((l) => l.id === id);
+    if (!item) return;
+    const record = { ...item, log: [...item.log, entry] };
+    await updateLote(id, record);
+    renderLotesGrid();
   }
 }
 
@@ -2081,20 +2026,6 @@ function renderPerfumesGrid() {
   el.innerHTML = `<div class="forms-grid">${sorted.map((p) => perfumeCardHtml(p)).join("")}</div>`;
 }
 
-// MÓDULO 18/19: caixa de custo do perfume
-function perfumeCostBoxHtml(p) {
-  const b = perfumeCostBreakdown(p);
-  if (!b.hasFormula && b.pkgLines.length === 0) return "";
-  return `
-    <div class="cost-box">
-      <div class="cost-box-title">Custo final (${fmt(b.fillMl)}ml)</div>
-      <div class="calc-result-row"><span>fórmula</span><span>${fmtBRL(b.formulaCost)}</span></div>
-      ${b.pkgLines.map((l) => `<div class="calc-result-row"><span style="color:var(--ash)">${esc(l.name)} ×${fmt(l.qty)}</span><span>${fmtBRL(l.cost)}</span></div>`).join("")}
-      <div class="calc-result-row" style="border-top:1px solid var(--hair-soft);padding-top:6px;"><span>custo total</span><span>${fmtBRL(b.total)}</span></div>
-      <div class="calc-result-row"><span>markup ${fmt(b.markup)}x</span><span style="color:var(--gold)">preço sugerido: ${fmtBRL(b.suggestedPrice)}</span></div>
-    </div>`;
-}
-
 function perfumeCardHtml(p) {
   const info = maturityInfo(p.createdAt, p.maturationDays);
   const linkedFormula = p.formulaId ? state.formulas.find((f) => f.id === p.formulaId) : null;
@@ -2108,7 +2039,6 @@ function perfumeCardHtml(p) {
       ${p.briefing ? `<div class="fcard-concept">${esc(p.briefing)}</div>` : ""}
       ${linkedFormula ? `<div style="font-size:11px;color:var(--gold);">fórmula vinculada: ${esc(linkedFormula.name)}</div>` : ""}
       ${maturityBarHtml(info)}
-      ${perfumeCostBoxHtml(p)}
       ${p.notes ? `<div class="card-notes">${esc(p.notes)}</div>` : ""}
       <div class="log-section">
         <div class="label" style="margin-top:0;">Evolução</div>
@@ -2133,60 +2063,12 @@ async function handleDeletePerfume(id) {
   renderPerfumesGrid();
 }
 
-function packagingOptionsHtml(selectedId) {
-  let html = `<option value="">— escolher insumo —</option>`;
-  PACKAGING_CATEGORIES.forEach((cat) => {
-    const opts = state.packaging.filter((p) => p.category === cat.key);
-    if (opts.length === 0) return;
-    html += `<optgroup label="${esc(cat.label)}">`;
-    opts.forEach((p) => {
-      html += `<option value="${p.id}" ${selectedId === p.id ? "selected" : ""}>${esc(p.name)} — ${fmtBRL(packagingUnitCost(p))}/un</option>`;
-    });
-    html += `</optgroup>`;
-  });
-  return html;
-}
-
-let perfumePkgRows = [];
-
-function renderPerfumePkgRows() {
-  const container = document.getElementById("pkgRowsContainer");
-  if (!container) return;
-  if (perfumePkgRows.length === 0) {
-    container.innerHTML = `<div class="log-empty">Nenhum insumo de embalagem adicionado ainda.</div>`;
-  } else {
-    container.innerHTML = perfumePkgRows
-      .map(
-        (row, i) => `
-      <div class="mat-editor" data-row="${row.rowId}">
-        <div class="mat-editor-top">
-          <span class="mat-editor-idx">insumo ${String(i + 1).padStart(2, "0")}</span>
-          <button type="button" class="remove-row" data-remove-pkg="${row.rowId}">remover</button>
-        </div>
-        <select class="input" id="pkgrow-item-${row.rowId}">${packagingOptionsHtml(row.packagingItemId)}</select>
-        <div>
-          <label class="label" style="margin-top:0;">Quantidade</label>
-          <input class="input" id="pkgrow-qty-${row.rowId}" type="number" step="1" value="${esc(row.qty)}" />
-        </div>
-      </div>`
-      )
-      .join("");
-  }
-  perfumePkgRows.forEach((row) => {
-    const removeBtn = container.querySelector(`[data-remove-pkg="${row.rowId}"]`);
-    if (removeBtn) removeBtn.addEventListener("click", () => { perfumePkgRows = perfumePkgRows.filter((r) => r.rowId !== row.rowId); renderPerfumePkgRows(); });
-  });
-}
-
 function openPerfumeModal(editId) {
   const editing = editId ? state.perfumes.find((p) => p.id === editId) : null;
-  perfumePkgRows = editing && editing.packaging.length
-    ? editing.packaging.map((l) => ({ rowId: uid(), packagingItemId: l.packagingItemId, qty: l.qty }))
-    : [];
   const root = document.getElementById("modalRoot");
   root.innerHTML = `
     <div class="overlay" id="overlay">
-      <form class="modal modal-wide" id="perfumeForm">
+      <form class="modal" id="perfumeForm">
         <div class="modal-title">${editing ? "Editar criação" : "Nova criação"}</div>
 
         <label class="label">Nome do perfume</label>
@@ -2205,23 +2087,6 @@ function openPerfumeModal(editId) {
         <input class="input" id="pf-maturation" type="number" step="1" value="${editing ? editing.maturationDays : "18"}" />
         <div style="font-size:11px;color:var(--ash-dim);margin-top:4px;">Referência: leve/cítrico ~7-10d · equilibrado ~15-20d · pesado/resinoso ~25-35d</div>
 
-        <div class="cost-fieldset">
-          <div class="cost-fieldset-title">Custo final e precificação (MÓDULOS 18, 19)</div>
-          <div class="row2">
-            <div>
-              <label class="label" style="margin-top:0;">Volume do frasco (ml)</label>
-              <input class="input" id="pf-fillMl" type="number" step="1" value="${editing ? editing.fillMl : "50"}" />
-            </div>
-            <div>
-              <label class="label" style="margin-top:0;">Markup desejado (x)</label>
-              <input class="input" id="pf-markup" type="number" step="0.1" value="${editing ? editing.markup : "4"}" />
-            </div>
-          </div>
-          <label class="label">Embalagem</label>
-          <div id="pkgRowsContainer"></div>
-          <button type="button" class="add-row-btn" id="addPkgRowBtn">+ adicionar insumo</button>
-        </div>
-
         <label class="label">Notas</label>
         <textarea class="input" id="pf-notes" style="min-height:60px;resize:vertical;">${editing ? esc(editing.notes) : ""}</textarea>
 
@@ -2238,12 +2103,6 @@ function openPerfumeModal(editId) {
   document.getElementById("perfumeForm").addEventListener("click", (e) => e.stopPropagation());
   root.querySelector('[data-action="close-modal"]').addEventListener("click", closeModal);
 
-  renderPerfumePkgRows();
-  document.getElementById("addPkgRowBtn").addEventListener("click", () => {
-    perfumePkgRows.push({ rowId: uid(), packagingItemId: "", qty: 1 });
-    renderPerfumePkgRows();
-  });
-
   document.getElementById("perfumeForm").addEventListener("submit", async (e) => {
     e.preventDefault();
     const name = document.getElementById("pf-name").value.trim();
@@ -2251,158 +2110,17 @@ function openPerfumeModal(editId) {
     if (!name) { errEl.textContent = "Dá um nome pro perfume antes de salvar."; errEl.style.display = "block"; return; }
     errEl.style.display = "none";
 
-    const packaging = perfumePkgRows
-      .map((row) => {
-        const sel = document.getElementById("pkgrow-item-" + row.rowId);
-        const qtyInput = document.getElementById("pkgrow-qty-" + row.rowId);
-        return { packagingItemId: sel ? sel.value : "", qty: parseFloat(qtyInput ? qtyInput.value : 0) || 0 };
-      })
-      .filter((l) => l.packagingItemId);
-
     const record = {
       name,
       briefing: document.getElementById("pf-briefing").value.trim(),
       formulaId: document.getElementById("pf-formula").value || null,
       maturationDays: parseFloat(document.getElementById("pf-maturation").value) || 18,
-      fillMl: parseFloat(document.getElementById("pf-fillMl").value) || 50,
-      markup: parseFloat(document.getElementById("pf-markup").value) || 4,
-      packaging,
       notes: document.getElementById("pf-notes").value.trim(),
       log: editing ? editing.log : [],
     };
 
     const ok = editing ? await updatePerfume(editing.id, record) : await addPerfume(record);
     if (ok) { closeModal(); renderPerfumesGrid(); }
-  });
-}
-
-/* ------------------------------ EMBALAGENS TAB ------------------------------ */
-/* MÓDULO 17 — insumos de embalagem */
-
-function embalagensShellHtml() {
-  return `
-    <div class="form-header">
-      <span class="form-count">${state.packaging.length} insumo${state.packaging.length === 1 ? "" : "s"} cadastrado${state.packaging.length === 1 ? "" : "s"}</span>
-      <button class="btn-primary" data-action="new-packaging">+ Novo insumo</button>
-    </div>
-    <div id="packagingGrid"></div>
-  `;
-}
-
-function wireEmbalagensShell() {
-  document.getElementById("tabContent").addEventListener("click", delegatedEmbalagensClicks);
-  renderPackagingGrid();
-}
-
-function delegatedEmbalagensClicks(e) {
-  const btn = e.target.closest("[data-action]");
-  if (!btn) return;
-  const action = btn.dataset.action;
-  if (action === "new-packaging") openPackagingModal(null);
-  else if (action === "edit-packaging") openPackagingModal(btn.dataset.id);
-  else if (action === "delete-packaging") handleDeletePackaging(btn.dataset.id);
-}
-
-function renderPackagingGrid() {
-  const el = document.getElementById("packagingGrid");
-  if (!el) return;
-  if (state.packaging.length === 0) {
-    el.innerHTML = `
-      <div class="empty">
-        <div class="empty-title">Nenhum insumo de embalagem</div>
-        <div class="empty-sub">Cadastre frascos, válvulas, tampas, caixas e etiquetas pra calcular o custo final dos teus perfumes.</div>
-        <button class="btn-primary" data-action="new-packaging">+ Novo insumo</button>
-      </div>`;
-    return;
-  }
-  const grouped = {};
-  PACKAGING_CATEGORIES.forEach((c) => (grouped[c.key] = []));
-  state.packaging.forEach((p) => (grouped[p.category] = grouped[p.category] || []).push(p));
-  let html = "";
-  PACKAGING_CATEGORIES.forEach((c) => {
-    const list = grouped[c.key] || [];
-    if (list.length === 0) return;
-    html += `<section class="fam-section"><div class="fam-title" style="padding:10px 2px;border-bottom:1px solid var(--hair);">${esc(c.label)}</div><div class="grid">${list.map(packagingCardHtml).join("")}</div></section>`;
-  });
-  el.innerHTML = html;
-}
-
-function packagingCardHtml(p) {
-  return `
-    <div class="card">
-      <div class="card-bar" style="background:var(--gold)"></div>
-      <div class="card-body">
-        <div class="card-top"><div class="card-name">${esc(p.name)}</div></div>
-        <div class="card-qty">${fmtBRL(packagingUnitCost(p))} <span style="color:var(--ash);font-size:12px;">/ un</span></div>
-        <div class="card-meta">
-          <span>${fmtBRL(p.price)} por ${fmt(p.quantity)} un</span>
-          ${p.supplier ? `<span>${esc(p.supplier)}</span>` : ""}
-        </div>
-        <div class="card-actions">
-          <button class="btn-text" data-action="edit-packaging" data-id="${p.id}">editar</button>
-          <button class="btn-text danger" data-action="delete-packaging" data-id="${p.id}">remover</button>
-        </div>
-      </div>
-    </div>`;
-}
-
-async function handleDeletePackaging(id) {
-  if (!confirm("Remover esse insumo de embalagem?")) return;
-  await deletePackaging(id);
-  renderPackagingGrid();
-}
-
-function openPackagingModal(editId) {
-  const editing = editId ? state.packaging.find((p) => p.id === editId) : null;
-  const root = document.getElementById("modalRoot");
-  root.innerHTML = `
-    <div class="overlay" id="overlay">
-      <form class="modal" id="packagingForm">
-        <div class="modal-title">${editing ? "Editar insumo" : "Novo insumo de embalagem"}</div>
-        <label class="label" style="margin-top:0;">Nome</label>
-        <input class="input" id="pk-name" value="${editing ? esc(editing.name) : ""}" placeholder="Ex: Frasco 50ml âmbar" />
-        <label class="label">Categoria</label>
-        <select class="input" id="pk-category">
-          ${PACKAGING_CATEGORIES.map((c) => `<option value="${c.key}" ${editing && editing.category === c.key ? "selected" : ""}>${esc(c.label)}</option>`).join("")}
-        </select>
-        <div class="row2">
-          <div>
-            <label class="label">Preço pago (R$)</label>
-            <input class="input" id="pk-price" type="number" step="0.01" value="${editing ? editing.price : ""}" />
-          </div>
-          <div>
-            <label class="label">Quantidade comprada</label>
-            <input class="input" id="pk-quantity" type="number" step="1" value="${editing ? editing.quantity : "1"}" />
-          </div>
-        </div>
-        <label class="label">Fornecedor</label>
-        <input class="input" id="pk-supplier" value="${editing ? esc(editing.supplier) : ""}" />
-        <div class="form-error" id="packagingFormError" style="display:none;"></div>
-        <div class="modal-actions">
-          <button type="button" class="btn-ghost" data-action="close-modal">Cancelar</button>
-          <button type="submit" class="btn-primary">${editing ? "Salvar alterações" : "Adicionar insumo"}</button>
-        </div>
-      </form>
-    </div>`;
-  document.getElementById("overlay").addEventListener("click", (e) => { if (e.target.id === "overlay") closeModal(); });
-  document.getElementById("packagingForm").addEventListener("click", (e) => e.stopPropagation());
-  root.querySelector('[data-action="close-modal"]').addEventListener("click", closeModal);
-
-  document.getElementById("packagingForm").addEventListener("submit", async (e) => {
-    e.preventDefault();
-    const name = document.getElementById("pk-name").value.trim();
-    const errEl = document.getElementById("packagingFormError");
-    if (!name) { errEl.textContent = "Dá um nome pro insumo antes de salvar."; errEl.style.display = "block"; return; }
-    errEl.style.display = "none";
-    const record = {
-      name,
-      category: document.getElementById("pk-category").value,
-      price: parseFloat(document.getElementById("pk-price").value) || 0,
-      quantity: parseFloat(document.getElementById("pk-quantity").value) || 1,
-      supplier: document.getElementById("pk-supplier").value.trim(),
-    };
-    const ok = editing ? await updatePackaging(editing.id, record) : await addPackaging(record);
-    if (ok) { closeModal(); renderPackagingGrid(); }
   });
 }
 
@@ -2433,8 +2151,8 @@ function handleExport() {
     formulas: state.formulas,
     accords: state.accords,
     perfumes: state.perfumes,
-    batches: state.batches,
-    packaging: state.packaging,
+    lotes: state.lotes,
+    movements: state.movements,
   };
   const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" });
   const url = URL.createObjectURL(blob);
@@ -2462,8 +2180,8 @@ function handleFileChosen(e) {
       }
       parsed.accords = Array.isArray(parsed.accords) ? parsed.accords : [];
       parsed.perfumes = Array.isArray(parsed.perfumes) ? parsed.perfumes : [];
-      parsed.batches = Array.isArray(parsed.batches) ? parsed.batches : [];
-      parsed.packaging = Array.isArray(parsed.packaging) ? parsed.packaging : [];
+      parsed.lotes = Array.isArray(parsed.lotes) ? parsed.lotes : [];
+      parsed.movements = Array.isArray(parsed.movements) ? parsed.movements : [];
       openImportConfirm(parsed);
     } catch (err) {
       showToast("Não consegui ler esse arquivo. Confere se é o JSON exportado daqui.");
@@ -2479,7 +2197,7 @@ function openImportConfirm(parsed) {
       <div class="modal" id="importModal">
         <div class="modal-title">Importar backup</div>
         <p style="font-size:13px;color:var(--ash);line-height:1.6;">
-          O arquivo tem ${parsed.items.length} material(is), ${parsed.formulas.length} fórmula(s), ${parsed.accords.length} acorde(s), ${parsed.perfumes.length} criação(ões), ${parsed.batches.length} lote(s) e ${parsed.packaging.length} insumo(s) de embalagem. Como tu quer aplicar?
+          O arquivo tem ${parsed.items.length} material(is), ${parsed.formulas.length} fórmula(s), ${parsed.accords.length} acorde(s), ${parsed.perfumes.length} criação(ões), ${parsed.lotes.length} lote(s) e ${parsed.movements.length} movimentação(ões). Como tu quer aplicar?
         </p>
         <p style="font-size:12px;color:var(--ash-dim);line-height:1.6;">
           <strong style="color:var(--white-dim)">Mesclar</strong> mantém o que já existe e só acrescenta o que for novo.
@@ -2507,20 +2225,20 @@ async function confirmImport(parsed, mode) {
       await sb.from("formulas").delete().gte("created_at", "1900-01-01");
       await sb.from("accords").delete().gte("created_at", "1900-01-01");
       await sb.from("perfumes").delete().gte("created_at", "1900-01-01");
-      await sb.from("batches").delete().gte("created_at", "1900-01-01");
-      await sb.from("packaging_items").delete().gte("created_at", "1900-01-01");
+      await sb.from("lotes").delete().gte("created_at", "1900-01-01");
+      await sb.from("stock_movements").delete().gte("created_at", "1900-01-01");
       const matRows = parsed.items.map(toMaterialRow);
       const formRows = parsed.formulas.map(toFormulaRow);
       const accRows = parsed.accords.map(toAccordRow);
       const perfRows = parsed.perfumes.map(toPerfumeRow);
-      const batchRows = parsed.batches.map(toBatchRow);
-      const pkgRows = parsed.packaging.map(toPackagingRow);
+      const loteRows = parsed.lotes.map(toLoteRow);
+      const movRows = parsed.movements.map(toMovementRow);
       if (matRows.length) await sb.from("materials").insert(matRows);
       if (formRows.length) await sb.from("formulas").insert(formRows);
       if (accRows.length) await sb.from("accords").insert(accRows);
       if (perfRows.length) await sb.from("perfumes").insert(perfRows);
-      if (batchRows.length) await sb.from("batches").insert(batchRows);
-      if (pkgRows.length) await sb.from("packaging_items").insert(pkgRows);
+      if (loteRows.length) await sb.from("lotes").insert(loteRows);
+      if (movRows.length) await sb.from("stock_movements").insert(movRows);
     } else {
       const dedupeKey = (it) => `${(it.name || "").toLowerCase()}|${it.family}|${it.concentration}`;
       const existingKeys = new Set(state.items.map(dedupeKey));
@@ -2538,6 +2256,12 @@ async function confirmImport(parsed, mode) {
       const existingPerfumeNames = new Set(state.perfumes.map((p) => (p.name || "").toLowerCase()));
       const newPerfumes = parsed.perfumes.filter((p) => !existingPerfumeNames.has((p.name || "").toLowerCase())).map(toPerfumeRow);
       if (newPerfumes.length) await sb.from("perfumes").insert(newPerfumes);
+
+      const existingLoteCodes = new Set(state.lotes.map((l) => l.code));
+      const newLotes = parsed.lotes.filter((l) => !existingLoteCodes.has(l.code)).map(toLoteRow);
+      if (newLotes.length) await sb.from("lotes").insert(newLotes);
+      // Movimentações não são mescladas automaticamente (histórico transacional) —
+      // só entram junto se for "Substituir tudo", pra não duplicar registros.
     }
     await reload();
     closeModal();
