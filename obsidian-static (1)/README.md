@@ -6,32 +6,50 @@ arquivos pro GitHub, sem precisar de Node/npm/git instalados na tua máquina.
 
 ## O que tem
 
+- **Painel**: dashboard com indicadores gerais e financeiros (materiais abaixo
+  do mínimo, valor total em estoque, custo médio dos lotes, valor consumido
+  no mês, destaques de custo, próxima maceração a avaliar).
 - **Estoque**: cadastro de materiais separados por **categoria** (Químico / Óleo
   Essencial / Absoluto) e por **família olfativa** (12 famílias), com diluição
-  em Puro (100%), 50%, 10% ou 1% (ou uma % customizada).
+  em Puro (100%), 50%, 10% ou 1% (ou uma % customizada). Cada material também
+  guarda o que foi pago e a quantidade comprada, pra calcular o custo unitário
+  automaticamente. Alerta visual quando o estoque fica abaixo do mínimo.
 - **Detecção automática de família olfativa** ao digitar o nome do material
   (dicionário embutido com matérias-primas comuns de perfumaria).
 - **Fórmulas**: cadastro de receitas técnicas com pirâmide olfativa (topo/coração/fundo),
-  puxando materiais direto do estoque ou digitados manualmente.
+  puxando materiais direto do estoque ou digitados manualmente. Mostra o custo
+  da fórmula por 4/10/30/50/100ml e a produção máxima possível com o estoque atual.
 - **Calculadora de lote**: informa tamanho do frasco + concentração final e
   calcula quanto pesar de cada material, avisando se falta estoque.
+- **Produzir lote**: a partir de uma fórmula, gera um lote real — calcula os
+  ingredientes automaticamente, valida o estoque (bloqueia se faltar qualquer
+  material), debita o estoque, grava o histórico de movimentação e calcula o
+  custo total e por ml do lote.
+- **Lotes**: acompanhamento de cada lote produzido — maceração automática
+  (15/30/45/60 dias ou customizado), status (macerando/pronto/entregue),
+  timeline de evolução e custo.
 - **Acordes**: controle de testes de acordes em maceração — cada acorde tem sua
   lista de materiais (%), um prazo estimado de maturação e uma barra que muda
   de vermelho pra maduro conforme os dias passam. Dá pra registrar anotações
   de evolução ao longo do tempo (dia 1, dia 7, dia 15...).
 - **Perfumes**: painel de acompanhamento das criações — nome, briefing/proposta,
-  fórmula técnica vinculada (opcional), e a mesma barra de maturação + registro
-  de evolução dos Acordes.
-- **Backup**: exportar/importar tudo (materiais, fórmulas, acordes, perfumes)
-  em `.json` (mesclar ou substituir).
+  fórmula técnica vinculada (opcional), embalagem (frasco/válvula/caixa/etiqueta),
+  a mesma barra de maturação + registro de evolução, e cálculo automático do
+  custo final e preço sugerido (a partir do markup desejado).
+- **Embalagens**: cadastro de insumos de embalagem com preço, quantidade
+  comprada e custo unitário calculado.
+- **Backup**: exportar/importar tudo (materiais, fórmulas, acordes, perfumes,
+  lotes, embalagens) em `.json` (mesclar ou substituir).
 - Banco de dados real no **Supabase** (Postgres) — não depende de navegador
   nem de sessão do Claude.
 
 ## 1. Banco (Supabase)
 
-**Se é a primeira vez configurando:** roda o `sql/schema.sql` inteiro (SQL Editor → New query → cola → Run).
+**Se é a primeira vez configurando:** roda o `schema.sql` inteiro (SQL Editor → New query → cola → Run). Já sai com todas as tabelas, incluindo lotes, movimentação de estoque e embalagens.
 
-**Se já tem `materials` e `formulas` rodando em produção:** não precisa apagar nada — só roda o `sql/migration_acordes_perfumes.sql`, que só *acrescenta* as tabelas `accords` e `perfumes` sem mexer no que já existe.
+**Se já tem `materials`/`formulas` rodando em produção, sem `accords`/`perfumes`:** roda o `migration_acordes_perfumes.sql`.
+
+**Se já tem `accords`/`perfumes` e quer os módulos de produção e custo (lotes, movimentação de estoque, embalagens, preços):** roda o `migration_producao_custos.sql`. Ele só *acrescenta* colunas/tabelas novas — não apaga nada.
 
 ## 2. Configurar
 

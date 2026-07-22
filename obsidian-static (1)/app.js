@@ -1,9 +1,6 @@
 /* ==========================================================================
-   OBSIDIAN — Laboratório (Módulos de Produção, Lotes e Custos Financeiros)
+   OBSIDIAN — Laboratório (JS puro, sem build, sem framework)
    ========================================================================== */
-
-import { CostService } from './costService.js';
-import { produceBatch } from './batchesService.js';
 
 /* ------------------------------- CONFIG ---------------------------------- */
 
@@ -12,13 +9,14 @@ if (!CFG.SUPABASE_URL || CFG.SUPABASE_URL.includes("COLE_AQUI") || !CFG.SUPABASE
   document.getElementById("app").innerHTML =
     '<div style="padding:60px 24px;font-family:sans-serif;color:#F2F1ED;background:#0B0B0D;min-height:100vh;">' +
     '<h2>Falta configurar o config.js</h2>' +
-    '</div>';
+    '<p style="color:#8b8d91;max-width:480px;">Abre o arquivo <code>config.js</code> e cola a URL e a chave (publishable key) do teu projeto Supabase antes de usar.</p>' +
+    "</div>";
   throw new Error("OBSIDIAN_CONFIG não preenchido");
 }
 
-export const sb = window.supabase.createClient(CFG.SUPABASE_URL, CFG.SUPABASE_ANON_KEY);
+const sb = window.supabase.createClient(CFG.SUPABASE_URL, CFG.SUPABASE_ANON_KEY);
 
-/* -------------------------------- DADOS & ESTADO -------------------------- */
+/* -------------------------------- DADOS ----------------------------------- */
 
 const CATEGORIES = [
   { key: "quimico", label: "Químico" },
@@ -43,6 +41,8 @@ const FAMILIES = [
 ];
 const famMap = Object.fromEntries(FAMILIES.map((f) => [f.key, f]));
 
+const CONCENTRATIONS = [100, 50, 10, 1];
+
 const POSITIONS = [
   { key: "topo", label: "Topo", color: "#E8C468" },
   { key: "coracao", label: "Coração", color: "#C9A227" },
@@ -50,17 +50,372 @@ const POSITIONS = [
 ];
 const posMap = Object.fromEntries(POSITIONS.map((p) => [p.key, p]));
 
-const TABS = [
-  { key: "estoque", label: "Estoque" },
-  { key: "formulas", label: "Fórmulas" },
-  { key: "acordes", label: "Acordes" },
-  { key: "perfumes", label: "Perfumes" },
-  { key: "lotes", label: "Lotes" },
-  { key: "financeiro", label: "Financeiro" }
+const CONC_PRESETS = [
+  { label: "Extrait de Parfum", pct: 30 },
+  { label: "Eau de Parfum", pct: 18 },
+  { label: "Eau de Toilette", pct: 10 },
+  { label: "Eau de Cologne", pct: 4 },
+  { label: "Personalizado", pct: null },
 ];
 
+// Dicionário pra sugerir a família olfativa a partir do nome digitado.
+const AROMA_FAMILY_MAP = {
+  "bergamota": "citrico", "bergamot": "citrico", "limoneno": "citrico", "limonene": "citrico",
+  "limao": "citrico", "lima": "citrico", "laranja": "citrico", "orange": "citrico",
+  "tangerina": "citrico", "mandarina": "citrico", "grapefruit": "citrico", "toranja": "citrico",
+  "litsea cubeba": "citrico", "citral": "citrico", "verbena": "citrico", "yuzu": "citrico",
+  "petitgrain": "citrico", "neroli": "citrico", "citronela": "citrico",
+  "linalol": "floral", "linalool": "floral", "geraniol": "floral", "feniletanol": "floral",
+  "phenylethyl": "floral", "fenetil": "floral", "hedione": "floral", "rosa": "floral", "rose": "floral",
+  "jasmim": "floral", "jasmine": "floral", "ylang": "floral", "ionona": "floral", "ionone": "floral",
+  "lirial": "floral", "lyral": "floral", "muguet": "floral", "lily": "floral", "violeta": "floral",
+  "peonia": "floral", "peony": "floral", "magnolia": "floral", "freesia": "floral",
+  "antranilato": "floral", "anthranilate": "floral", "cyclamen": "floral", "gardenia": "floral",
+  "orquidea": "floral", "orchid": "floral",
+  "folha": "verde", "leaf": "verde", "galbanum": "verde", "hexenol": "verde",
+  "violet leaf": "verde", "grama": "verde", "tomate": "verde", "tomato": "verde", "triplal": "verde",
+  "cortica": "verde", "green": "verde",
+  "calone": "aquatico", "helional": "aquatico", "melao": "aquatico", "melon": "aquatico",
+  "marinho": "aquatico", "aquatico": "aquatico", "ozonico": "aquatico", "ozone": "aquatico", "sea": "aquatico",
+  "iso e super": "amadeirado", "isoesuper": "amadeirado", "cedro": "amadeirado", "cedar": "amadeirado",
+  "cedrol": "amadeirado", "sandalo": "amadeirado", "sandalwood": "amadeirado", "vetiver": "amadeirado",
+  "amyris": "amadeirado", "guaiac": "amadeirado", "madeira": "amadeirado", "wood": "amadeirado",
+  "javanol": "amadeirado", "ebanol": "amadeirado", "akigalawood": "amadeirado", "clearwood": "amadeirado",
+  "eugenol": "especiado", "cravo": "especiado", "clove": "especiado", "canela": "especiado",
+  "cinnamaldehyde": "especiado", "pimenta": "especiado", "pepper": "especiado",
+  "cardamomo": "especiado", "cardamom": "especiado", "gengibre": "especiado", "ginger": "especiado",
+  "noz moscada": "especiado", "nutmeg": "especiado", "cominho": "especiado", "cumin": "especiado",
+  "ambroxan": "ambar", "ambrox": "ambar", "labdanum": "ambar", "benjoim": "ambar",
+  "benzoin": "ambar", "tonka": "ambar", "tonca": "ambar", "olibanum": "ambar",
+  "incenso": "ambar", "frankincense": "ambar", "mirra": "ambar", "myrrh": "ambar",
+  "amber": "ambar", "ambar": "ambar", "cistus": "ambar", "laudano": "ambar",
+  "almiscar": "almiscarado", "musk": "almiscarado", "galaxolide": "almiscarado",
+  "exaltolide": "almiscarado", "muscone": "almiscarado", "habanolide": "almiscarado",
+  "helvetolide": "almiscarado", "romandolide": "almiscarado",
+  "aldeido": "aldeidico", "aldehyde": "aldeidico", "undecanal": "aldeidico",
+  "decanal": "aldeidico", "dodecanal": "aldeidico",
+  "baunilha": "gourmand", "vanillin": "gourmand", "vanilla": "gourmand",
+  "maltol": "gourmand", "cumarina": "gourmand", "coumarin": "gourmand",
+  "caramelo": "gourmand", "chocolate": "gourmand", "cafe": "gourmand", "coffee": "gourmand",
+  "mel": "gourmand", "honey": "gourmand", "amendoa": "gourmand", "heliotropina": "gourmand",
+  "heliotropine": "gourmand", "praline": "gourmand",
+  "civeta": "animalico", "civet": "animalico", "castoreo": "animalico", "castoreum": "animalico",
+  "indol": "animalico", "indole": "animalico", "couro": "animalico", "leather": "animalico",
+  "suederal": "animalico",
+  "musgo de carvalho": "chipre", "oakmoss": "chipre", "chipre": "chipre", "evernyl": "chipre",
+  "patchouli": "chipre", "patchuli": "chipre",
+};
+const normalizeStr = (s) => (s || "").normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase().trim();
+const SORTED_AROMA_KEYS = Object.keys(AROMA_FAMILY_MAP).sort((a, b) => b.length - a.length);
+function guessFamily(rawName) {
+  const norm = normalizeStr(rawName);
+  if (!norm) return null;
+  for (const key of SORTED_AROMA_KEYS) {
+    if (norm.includes(normalizeStr(key))) return AROMA_FAMILY_MAP[key];
+  }
+  return null;
+}
+
+const uid = () => Math.random().toString(36).slice(2, 10);
+const fmt = (n) => (Number.isFinite(n) ? (Math.round(n * 100) / 100).toString() : "0");
+const esc = (s) =>
+  String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+
+const fmtBRL = (n) => "R$ " + (Number.isFinite(n) ? n : 0).toLocaleString("pt-BR", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+
+// Custo unitário (R$ por g ou ml) de um material, a partir do que foi pago.
+function materialUnitCost(mat) {
+  if (!mat) return 0;
+  const paid = Number(mat.pricePaid);
+  const qty = Number(mat.quantityPurchased);
+  if (!Number.isFinite(paid) || !Number.isFinite(qty) || qty <= 0) return 0;
+  return paid / qty;
+}
+function materialHasCost(mat) {
+  return Number(mat.pricePaid) > 0 && Number(mat.quantityPurchased) > 0;
+}
+
+// Quantos ml/g de cada material são necessários pra um lote de `batchMl` ml
+// numa fórmula com concentração `concPct`%.
+function computeFormulaNeeds(formula, batchMl, concPct) {
+  const compound = (batchMl * concPct) / 100;
+  return formula.materials.map((m) => {
+    const inv = m.inventoryId ? state.items.find((it) => it.id === m.inventoryId) : null;
+    const needed = (compound * m.percentage) / 100;
+    const unitCost = inv ? materialUnitCost(inv) : 0;
+    return {
+      materialId: m.inventoryId || null,
+      name: m.name,
+      unit: inv ? inv.unit : "g",
+      needed,
+      available: inv ? inv.quantity : null,
+      unitCost,
+      cost: needed * unitCost,
+      hasCost: inv ? materialHasCost(inv) : false,
+    };
+  });
+}
+
+// Custo por ml do blend final da fórmula, na concentração padrão dela.
+function formulaCostPerMl(formula) {
+  const needs = computeFormulaNeeds(formula, 1, formula.concentrationPct);
+  return needs.reduce((a, n) => a + n.cost, 0);
+}
+function formulaCostIncomplete(formula) {
+  return computeFormulaNeeds(formula, 1, formula.concentrationPct).some((n) => n.materialId && !n.hasCost);
+}
+
+// Produção máxima possível (ml) da fórmula, limitada pelo ingrediente mais escasso.
+function formulaMaxBatch(formula) {
+  const conc = formula.concentrationPct || 1;
+  let max = Infinity;
+  let limiting = null;
+  formula.materials.forEach((m) => {
+    if (!m.inventoryId || !m.percentage) return;
+    const inv = state.items.find((it) => it.id === m.inventoryId);
+    if (!inv) return;
+    // needed(batchMl) = batchMl * conc/100 * pct/100  ==>  batchMl = inv.quantity / (conc/100 * pct/100)
+    const perMl = (conc / 100) * (m.percentage / 100);
+    if (perMl <= 0) return;
+    const possible = inv.quantity / perMl;
+    if (possible < max) { max = possible; limiting = inv.name; }
+  });
+  if (!Number.isFinite(max)) return { max: null, limiting: null };
+  return { max, limiting };
+}
+
+// MÓDULO 18/19: custo final do perfume (fórmula + embalagem) e preço sugerido.
+function perfumeCostBreakdown(perfume) {
+  const formula = perfume.formulaId ? state.formulas.find((f) => f.id === perfume.formulaId) : null;
+  const fillMl = perfume.fillMl || 50;
+  const formulaCost = formula ? formulaCostPerMl(formula) * fillMl : 0;
+  const pkgLines = (perfume.packaging || []).map((line) => {
+    const pkg = state.packaging.find((p) => p.id === line.packagingItemId);
+    const unitCost = pkg ? packagingUnitCost(pkg) : 0;
+    const qty = Number(line.qty) || 0;
+    return { name: pkg ? pkg.name : "(insumo removido)", category: pkg ? pkg.category : "outro", qty, unitCost, cost: qty * unitCost };
+  });
+  const packagingCost = pkgLines.reduce((a, l) => a + l.cost, 0);
+  const total = formulaCost + packagingCost;
+  const markup = perfume.markup || 4;
+  const suggestedPrice = total * markup;
+  return { formulaCost, pkgLines, packagingCost, total, markup, suggestedPrice, fillMl, hasFormula: !!formula };
+}
+
+function generateBatchCode(formula) {
+  const initials = (formula.name || "LT")
+    .split(/\s+/)
+    .filter((w) => w.length)
+    .map((w) => w[0].toUpperCase())
+    .slice(0, 3)
+    .join("") || "LT";
+  const count = state.batches.filter((b) => b.formulaId === formula.id).length + 1;
+  return `${initials}-${String(count).padStart(3, "0")}`;
+}
+
+/* ----------------------------- DB <-> JS ---------------------------------- */
+
+const mapMaterialFromDb = (row) => ({
+  id: row.id,
+  name: row.name,
+  category: row.category || "quimico",
+  family: row.family,
+  typicalPosition: row.typical_position || null,
+  concentration: Number(row.concentration),
+  unit: row.unit,
+  quantity: Number(row.quantity),
+  minStock: row.min_stock != null ? Number(row.min_stock) : null,
+  solvent: row.solvent || "",
+  cas: row.cas || "",
+  supplier: row.supplier || "",
+  notes: row.notes || "",
+  pricePaid: row.price_paid != null ? Number(row.price_paid) : null,
+  quantityPurchased: row.quantity_purchased != null ? Number(row.quantity_purchased) : null,
+  purchaseDate: row.purchase_date || null,
+});
+
+const toMaterialRow = (it) => ({
+  name: it.name,
+  category: it.category,
+  family: it.family,
+  typical_position: it.typicalPosition || null,
+  concentration: it.concentration,
+  unit: it.unit,
+  quantity: it.quantity,
+  min_stock: it.minStock,
+  solvent: it.solvent,
+  cas: it.cas,
+  supplier: it.supplier,
+  notes: it.notes,
+  price_paid: it.pricePaid != null && it.pricePaid !== "" ? it.pricePaid : null,
+  quantity_purchased: it.quantityPurchased != null && it.quantityPurchased !== "" ? it.quantityPurchased : null,
+  purchase_date: it.purchaseDate || null,
+});
+
+const mapFormulaFromDb = (row) => ({
+  id: row.id,
+  createdAt: row.created_at ? new Date(row.created_at).getTime() : Date.now(),
+  name: row.name,
+  concept: row.concept || "",
+  concentrationType: row.concentration_type,
+  concentrationPct: Number(row.concentration_pct),
+  materials: Array.isArray(row.materials) ? row.materials : [],
+  notes: row.notes || "",
+});
+
+const toFormulaRow = (f) => ({
+  name: f.name,
+  concept: f.concept,
+  concentration_type: f.concentrationType,
+  concentration_pct: f.concentrationPct,
+  materials: f.materials,
+  notes: f.notes,
+});
+
+const mapAccordFromDb = (row) => ({
+  id: row.id,
+  name: row.name,
+  materials: Array.isArray(row.materials) ? row.materials : [],
+  maturationDays: Number(row.maturation_days),
+  notes: row.notes || "",
+  log: Array.isArray(row.log) ? row.log : [],
+  createdAt: row.created_at ? new Date(row.created_at).getTime() : Date.now(),
+});
+const toAccordRow = (a) => ({
+  name: a.name,
+  materials: a.materials,
+  maturation_days: a.maturationDays,
+  notes: a.notes,
+  log: a.log || [],
+});
+
+const mapPerfumeFromDb = (row) => ({
+  id: row.id,
+  name: row.name,
+  briefing: row.briefing || "",
+  formulaId: row.formula_id || null,
+  maturationDays: Number(row.maturation_days),
+  notes: row.notes || "",
+  log: Array.isArray(row.log) ? row.log : [],
+  packaging: Array.isArray(row.packaging) ? row.packaging : [],
+  fillMl: row.fill_ml != null ? Number(row.fill_ml) : 50,
+  markup: row.markup != null ? Number(row.markup) : 4,
+  createdAt: row.created_at ? new Date(row.created_at).getTime() : Date.now(),
+});
+const toPerfumeRow = (p) => ({
+  name: p.name,
+  briefing: p.briefing,
+  formula_id: p.formulaId || null,
+  maturation_days: p.maturationDays,
+  notes: p.notes,
+  log: p.log || [],
+  packaging: p.packaging || [],
+  fill_ml: p.fillMl || 50,
+  markup: p.markup || 4,
+});
+
+const mapBatchFromDb = (row) => ({
+  id: row.id,
+  formulaId: row.formula_id || null,
+  code: row.code,
+  batchType: row.batch_type || "teste",
+  quantityMl: Number(row.quantity_ml),
+  maturationDays: Number(row.maturation_days),
+  status: row.status || "macerando",
+  ingredients: Array.isArray(row.ingredients) ? row.ingredients : [],
+  totalCost: Number(row.total_cost) || 0,
+  costPerMl: Number(row.cost_per_ml) || 0,
+  notes: row.notes || "",
+  log: Array.isArray(row.log) ? row.log : [],
+  createdAt: row.created_at ? new Date(row.created_at).getTime() : Date.now(),
+});
+const toBatchRow = (b) => ({
+  formula_id: b.formulaId || null,
+  code: b.code,
+  batch_type: b.batchType,
+  quantity_ml: b.quantityMl,
+  maturation_days: b.maturationDays,
+  status: b.status,
+  ingredients: b.ingredients || [],
+  total_cost: b.totalCost || 0,
+  cost_per_ml: b.costPerMl || 0,
+  notes: b.notes,
+  log: b.log || [],
+});
+
+const mapMovementFromDb = (row) => ({
+  id: row.id,
+  materialId: row.material_id,
+  type: row.movement_type,
+  quantity: Number(row.quantity),
+  origin: row.origin || "",
+  notes: row.notes || "",
+  createdAt: row.created_at ? new Date(row.created_at).getTime() : Date.now(),
+});
+const toMovementRow = (m) => ({
+  material_id: m.materialId,
+  movement_type: m.type,
+  quantity: m.quantity,
+  origin: m.origin,
+  notes: m.notes,
+});
+
+const mapPackagingFromDb = (row) => ({
+  id: row.id,
+  name: row.name,
+  category: row.category || "frasco",
+  price: Number(row.price) || 0,
+  quantity: Number(row.quantity) || 1,
+  supplier: row.supplier || "",
+  createdAt: row.created_at ? new Date(row.created_at).getTime() : Date.now(),
+});
+const toPackagingRow = (p) => ({
+  name: p.name,
+  category: p.category,
+  price: p.price,
+  quantity: p.quantity,
+  supplier: p.supplier,
+});
+
+const PACKAGING_CATEGORIES = [
+  { key: "frasco", label: "Frasco" },
+  { key: "valvula", label: "Válvula" },
+  { key: "tampa", label: "Tampa" },
+  { key: "caixa", label: "Caixa" },
+  { key: "etiqueta", label: "Etiqueta" },
+  { key: "outro", label: "Outro" },
+];
+const pkgCatMap = Object.fromEntries(PACKAGING_CATEGORIES.map((c) => [c.key, c]));
+function packagingUnitCost(p) {
+  return p.quantity > 0 ? p.price / p.quantity : 0;
+}
+
+/* ------------------------------- MATURAÇÃO --------------------------------- */
+
+const DAY_MS = 24 * 60 * 60 * 1000;
+
+function maturityInfo(createdAt, maturationDays) {
+  const elapsedDays = (Date.now() - createdAt) / DAY_MS;
+  const ratio = Math.max(0, Math.min(1, elapsedDays / (maturationDays || 1)));
+  // interpola de vermelho (hue 4) até verde-dourado (hue 90) conforme a maturação avança
+  const hue = 4 + ratio * 86;
+  const color = `hsl(${hue.toFixed(0)}, 58%, 52%)`;
+  const daysLeft = Math.max(0, Math.ceil(maturationDays - elapsedDays));
+  const mature = elapsedDays >= maturationDays;
+  return {
+    ratio,
+    color,
+    daysElapsed: Math.floor(elapsedDays),
+    daysLeft,
+    mature,
+    label: mature ? "maduro" : `faltam ${daysLeft} dia${daysLeft === 1 ? "" : "s"}`,
+  };
+}
+
+/* --------------------------------- STATE ---------------------------------- */
+
 const state = {
-  tab: "estoque",
+  tab: "painel",
   items: [],
   formulas: [],
   accords: [],
@@ -76,34 +431,231 @@ const state = {
   collapsed: {},
 };
 
-const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
-const fmt = (n) => (Number.isFinite(n) ? (Math.round(n * 100) / 100).toString() : "0");
+const calcState = {}; // por fórmula: { open, batchSize, concPct }
 
-/* ------------------------------- BANCO ------------------------------------ */
+let toastTimer = null;
+function showToast(msg, ok) {
+  const el = document.getElementById("toast");
+  el.textContent = msg;
+  el.className = "toast" + (ok ? " toast-ok" : "");
+  el.style.display = "block";
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => (el.style.display = "none"), 3200);
+}
+
+/* ------------------------------- SUPABASE --------------------------------- */
 
 async function reload() {
-  const { data: mats } = await sb.from("materials").select("*").order("name", { ascending: true });
-  state.items = mats || [];
+  const { data: mats, error: e1 } = await sb.from("materials").select("*").order("name", { ascending: true });
+  if (e1) showToast("Não consegui carregar o estoque do banco.");
+  else state.items = (mats || []).map(mapMaterialFromDb);
 
-  const { data: forms } = await sb.from("formulas").select("*").order("created_at", { ascending: true });
-  state.formulas = forms || [];
+  const { data: forms, error: e2 } = await sb.from("formulas").select("*").order("created_at", { ascending: true });
+  if (e2) showToast("Não consegui carregar as fórmulas do banco.");
+  else state.formulas = (forms || []).map(mapFormulaFromDb);
 
-  const { data: accs } = await sb.from("accords").select("*").order("created_at", { ascending: true });
-  state.accords = accs || [];
+  const { data: accs, error: e3 } = await sb.from("accords").select("*").order("created_at", { ascending: true });
+  if (e3) showToast("Não consegui carregar os acordes do banco.");
+  else state.accords = (accs || []).map(mapAccordFromDb);
 
-  const { data: perfs } = await sb.from("perfumes").select("*").order("created_at", { ascending: true });
-  state.perfumes = perfs || [];
+  const { data: perfs, error: e4 } = await sb.from("perfumes").select("*").order("created_at", { ascending: true });
+  if (e4) showToast("Não consegui carregar os perfumes do banco.");
+  else state.perfumes = (perfs || []).map(mapPerfumeFromDb);
 
-  const { data: bts } = await sb.from("batches").select("*").order("created_at", { ascending: false });
-  state.batches = bts || [];
+  const { data: batches, error: e5 } = await sb.from("batches").select("*").order("created_at", { ascending: true });
+  if (e5) showToast("Não consegui carregar os lotes do banco.");
+  else state.batches = (batches || []).map(mapBatchFromDb);
 
-  const { data: pkg } = await sb.from("packaging").select("*").order("name", { ascending: true });
-  state.packaging = pkg || [];
+  const { data: moves, error: e6 } = await sb.from("stock_movements").select("*").order("created_at", { ascending: false }).limit(300);
+  if (e6) showToast("Não consegui carregar a movimentação de estoque.");
+  else state.movements = (moves || []).map(mapMovementFromDb);
+
+  const { data: pkgs, error: e7 } = await sb.from("packaging_items").select("*").order("name", { ascending: true });
+  if (e7) showToast("Não consegui carregar os insumos de embalagem.");
+  else state.packaging = (pkgs || []).map(mapPackagingFromDb);
 
   state.loaded = true;
 }
 
+async function addItem(record) {
+  const { data, error } = await sb.from("materials").insert(toMaterialRow(record)).select().single();
+  if (error || !data) { showToast("Não consegui salvar o material no banco."); return false; }
+  state.items.push(mapMaterialFromDb(data));
+  return true;
+}
+async function updateItem(id, record) {
+  const { error } = await sb.from("materials").update(toMaterialRow(record)).eq("id", id);
+  if (error) { showToast("Não consegui atualizar o material no banco."); return false; }
+  const idx = state.items.findIndex((it) => it.id === id);
+  if (idx >= 0) state.items[idx] = { ...record, id };
+  return true;
+}
+async function deleteItem(id) {
+  const { error } = await sb.from("materials").delete().eq("id", id);
+  if (error) { showToast("Não consegui remover o material do banco."); return false; }
+  state.items = state.items.filter((it) => it.id !== id);
+  return true;
+}
+
+async function addFormula(record) {
+  const { data, error } = await sb.from("formulas").insert(toFormulaRow(record)).select().single();
+  if (error || !data) { showToast("Não consegui salvar a fórmula no banco."); return false; }
+  state.formulas.push(mapFormulaFromDb(data));
+  return true;
+}
+async function updateFormula(id, record) {
+  const { error } = await sb.from("formulas").update(toFormulaRow(record)).eq("id", id);
+  if (error) { showToast("Não consegui atualizar a fórmula no banco."); return false; }
+  const idx = state.formulas.findIndex((f) => f.id === id);
+  if (idx >= 0) state.formulas[idx] = { ...record, id, createdAt: state.formulas[idx].createdAt };
+  return true;
+}
+async function deleteFormula(id) {
+  const { error } = await sb.from("formulas").delete().eq("id", id);
+  if (error) { showToast("Não consegui remover a fórmula do banco."); return false; }
+  state.formulas = state.formulas.filter((f) => f.id !== id);
+  return true;
+}
+
+async function addAccord(record) {
+  const { data, error } = await sb.from("accords").insert(toAccordRow(record)).select().single();
+  if (error || !data) { showToast("Não consegui salvar o acorde no banco."); return false; }
+  state.accords.push(mapAccordFromDb(data));
+  return true;
+}
+async function updateAccord(id, record) {
+  const { error } = await sb.from("accords").update(toAccordRow(record)).eq("id", id);
+  if (error) { showToast("Não consegui atualizar o acorde no banco."); return false; }
+  const idx = state.accords.findIndex((a) => a.id === id);
+  if (idx >= 0) state.accords[idx] = { ...record, id, createdAt: state.accords[idx].createdAt };
+  return true;
+}
+async function deleteAccord(id) {
+  const { error } = await sb.from("accords").delete().eq("id", id);
+  if (error) { showToast("Não consegui remover o acorde do banco."); return false; }
+  state.accords = state.accords.filter((a) => a.id !== id);
+  return true;
+}
+
+async function addPerfume(record) {
+  const { data, error } = await sb.from("perfumes").insert(toPerfumeRow(record)).select().single();
+  if (error || !data) { showToast("Não consegui salvar o perfume no banco."); return false; }
+  state.perfumes.push(mapPerfumeFromDb(data));
+  return true;
+}
+async function updatePerfume(id, record) {
+  const { error } = await sb.from("perfumes").update(toPerfumeRow(record)).eq("id", id);
+  if (error) { showToast("Não consegui atualizar o perfume no banco."); return false; }
+  const idx = state.perfumes.findIndex((p) => p.id === id);
+  if (idx >= 0) state.perfumes[idx] = { ...record, id, createdAt: state.perfumes[idx].createdAt };
+  return true;
+}
+async function deletePerfume(id) {
+  const { error } = await sb.from("perfumes").delete().eq("id", id);
+  if (error) { showToast("Não consegui remover o perfume do banco."); return false; }
+  state.perfumes = state.perfumes.filter((p) => p.id !== id);
+  return true;
+}
+
+async function addBatch(record) {
+  const { data, error } = await sb.from("batches").insert(toBatchRow(record)).select().single();
+  if (error || !data) { showToast("Não consegui salvar o lote no banco."); return null; }
+  const mapped = mapBatchFromDb(data);
+  state.batches.push(mapped);
+  return mapped;
+}
+async function updateBatch(id, record) {
+  const { error } = await sb.from("batches").update(toBatchRow(record)).eq("id", id);
+  if (error) { showToast("Não consegui atualizar o lote no banco."); return false; }
+  const idx = state.batches.findIndex((b) => b.id === id);
+  if (idx >= 0) state.batches[idx] = { ...record, id, createdAt: state.batches[idx].createdAt };
+  return true;
+}
+async function deleteBatch(id) {
+  const { error } = await sb.from("batches").delete().eq("id", id);
+  if (error) { showToast("Não consegui remover o lote do banco."); return false; }
+  state.batches = state.batches.filter((b) => b.id !== id);
+  return true;
+}
+
+async function addMovement(record) {
+  const { data, error } = await sb.from("stock_movements").insert(toMovementRow(record)).select().single();
+  if (error || !data) return null;
+  const mapped = mapMovementFromDb(data);
+  state.movements.unshift(mapped);
+  return mapped;
+}
+
+async function addPackaging(record) {
+  const { data, error } = await sb.from("packaging_items").insert(toPackagingRow(record)).select().single();
+  if (error || !data) { showToast("Não consegui salvar o insumo no banco."); return false; }
+  state.packaging.push(mapPackagingFromDb(data));
+  return true;
+}
+async function updatePackaging(id, record) {
+  const { error } = await sb.from("packaging_items").update(toPackagingRow(record)).eq("id", id);
+  if (error) { showToast("Não consegui atualizar o insumo no banco."); return false; }
+  const idx = state.packaging.findIndex((p) => p.id === id);
+  if (idx >= 0) state.packaging[idx] = { ...record, id, createdAt: state.packaging[idx].createdAt };
+  return true;
+}
+async function deletePackaging(id) {
+  const { error } = await sb.from("packaging_items").delete().eq("id", id);
+  if (error) { showToast("Não consegui remover o insumo do banco."); return false; }
+  state.packaging = state.packaging.filter((p) => p.id !== id);
+  return true;
+}
+
+// MÓDULO 3 e 4: valida estoque e, se ok, produz o lote (debita materiais + grava movimentações).
+async function produceBatch(formula, { quantityMl, batchType, maturationDays, notes }) {
+  const needs = computeFormulaNeeds(formula, quantityMl, formula.concentrationPct);
+  const shortages = needs.filter((n) => n.materialId && n.available != null && n.available < n.needed);
+  if (shortages.length > 0) {
+    return { ok: false, shortages };
+  }
+
+  const code = generateBatchCode(formula);
+  const totalCost = needs.reduce((a, n) => a + n.cost, 0);
+  const batch = await addBatch({
+    formulaId: formula.id,
+    code,
+    batchType,
+    quantityMl,
+    maturationDays,
+    status: "macerando",
+    ingredients: needs,
+    totalCost,
+    costPerMl: quantityMl > 0 ? totalCost / quantityMl : 0,
+    notes: notes || "",
+    log: [],
+  });
+  if (!batch) return { ok: false, shortages: [] };
+
+  const lowStockHits = [];
+  for (const n of needs) {
+    if (!n.materialId) continue;
+    const inv = state.items.find((it) => it.id === n.materialId);
+    if (!inv) continue;
+    const newQty = Math.max(0, inv.quantity - n.needed);
+    await updateItem(inv.id, { ...inv, quantity: newQty });
+    await addMovement({ materialId: inv.id, type: "saida", quantity: n.needed, origin: `Lote ${code}`, notes: `Produção da fórmula "${formula.name}"` });
+    if (inv.minStock != null && newQty < inv.minStock) lowStockHits.push(inv.name);
+  }
+
+  return { ok: true, batch, lowStockHits };
+}
+
 /* --------------------------------- RENDER --------------------------------- */
+
+const TABS = [
+  { key: "painel", label: "Painel" },
+  { key: "estoque", label: "Estoque" },
+  { key: "formulas", label: "Fórmulas" },
+  { key: "lotes", label: "Lotes" },
+  { key: "acordes", label: "Acordes" },
+  { key: "perfumes", label: "Perfumes" },
+  { key: "embalagens", label: "Embalagens" },
+];
 
 function render() {
   const app = document.getElementById("app");
@@ -116,6 +668,11 @@ function render() {
         </div>
         <div class="tabs">
           ${TABS.map((t) => `<button class="tab-btn ${state.tab === t.key ? "active" : ""}" data-action="tab" data-tab="${t.key}">${esc(t.label)}</button>`).join("")}
+        </div>
+        <div class="backup-actions">
+          <input type="file" accept="application/json" id="importFile" style="display:none" />
+          <button class="btn-ghost small" data-action="import">Importar backup</button>
+          <button class="btn-ghost small" data-action="export">Exportar backup</button>
         </div>
       </div>
       <div id="tabContent"></div>
@@ -133,163 +690,1868 @@ function renderTabContent() {
     el.innerHTML = `<div class="empty">Carregando laboratório...</div>`;
     return;
   }
-  if (state.tab === "estoque") { el.innerHTML = estoqueShellHtml(); wireEstoqueShell(); }
+  if (state.tab === "painel") { el.innerHTML = painelShellHtml(); wirePainelShell(); }
+  else if (state.tab === "estoque") { el.innerHTML = estoqueShellHtml(); wireEstoqueShell(); }
   else if (state.tab === "formulas") { el.innerHTML = formulasShellHtml(); wireFormulasShell(); }
-  else if (state.tab === "acordes") { el.innerHTML = acordesShellHtml(); }
-  else if (state.tab === "perfumes") { el.innerHTML = perfumesShellHtml(); }
-  else if (state.tab === "lotes") { el.innerHTML = lotesShellHtml(); }
-  else if (state.tab === "financeiro") { el.innerHTML = financeiroShellHtml(); }
+  else if (state.tab === "lotes") { el.innerHTML = lotesShellHtml(); wireLotesShell(); }
+  else if (state.tab === "acordes") { el.innerHTML = acordesShellHtml(); wireAcordesShell(); }
+  else if (state.tab === "perfumes") { el.innerHTML = perfumesShellHtml(); wirePerfumesShell(); }
+  else if (state.tab === "embalagens") { el.innerHTML = embalagensShellHtml(); wireEmbalagensShell(); }
 }
 
-/* ------------------------------ SHELLS DAS ABAS --------------------------- */
+/* -------------------------------- PAINEL TAB -------------------------------- */
+/* MÓDULOS 20 (financeiro) e 21 (geral) */
+
+function painelShellHtml() {
+  const stockValue = state.items.reduce((a, it) => a + it.quantity * materialUnitCost(it), 0);
+  const lowStock = state.items.filter((it) => it.minStock != null && it.quantity < it.minStock);
+
+  const priciestMaterial = [...state.items].filter(materialHasCost).sort((a, b) => materialUnitCost(b) - materialUnitCost(a))[0];
+  const priciestFormula = [...state.formulas].sort((a, b) => formulaCostPerMl(b) - formulaCostPerMl(a))[0];
+  const perfumeCosts = state.perfumes.map((p) => ({ p, cost: perfumeCostBreakdown(p).total }));
+  const priciestPerfume = perfumeCosts.sort((a, b) => b.cost - a.cost)[0];
+
+  const producedBatches = state.batches;
+  const avgBatchCost = producedBatches.length ? producedBatches.reduce((a, b) => a + b.totalCost, 0) / producedBatches.length : 0;
+
+  const now = new Date();
+  const monthStart = new Date(now.getFullYear(), now.getMonth(), 1).getTime();
+  const consumedThisMonth = state.movements
+    .filter((m) => m.type === "saida" && m.createdAt >= monthStart)
+    .reduce((a, m) => {
+      const mat = state.items.find((it) => it.id === m.materialId);
+      return a + (mat ? m.quantity * materialUnitCost(mat) : 0);
+    }, 0);
+
+  const macerating = [
+    ...state.batches.filter((b) => b.status === "macerando").map((b) => ({ label: `Lote ${b.code}`, createdAt: b.createdAt, maturationDays: b.maturationDays })),
+    ...state.accords.map((a) => ({ label: `Acorde · ${a.name}`, createdAt: a.createdAt, maturationDays: a.maturationDays })),
+    ...state.perfumes.map((p) => ({ label: `Perfume · ${p.name}`, createdAt: p.createdAt, maturationDays: p.maturationDays })),
+  ]
+    .map((x) => ({ ...x, info: maturityInfo(x.createdAt, x.maturationDays) }))
+    .filter((x) => !x.info.mature)
+    .sort((a, b) => a.info.daysLeft - b.info.daysLeft);
+  const nextReady = macerating[0];
+
+  const kpis = [
+    { label: "Materiais cadastrados", value: state.items.length },
+    { label: "Fórmulas", value: state.formulas.length },
+    { label: "Lotes em maceração", value: state.batches.filter((b) => b.status === "macerando").length },
+    { label: "Perfumes em desenvolvimento", value: state.perfumes.length },
+    { label: "Materiais abaixo do mínimo", value: lowStock.length, warn: lowStock.length > 0 },
+    { label: "Valor total em estoque", value: fmtBRL(stockValue) },
+    { label: "Custo médio dos lotes", value: fmtBRL(avgBatchCost) },
+    { label: "Valor consumido este mês", value: fmtBRL(consumedThisMonth) },
+  ];
+
+  return `
+    <div class="panel-grid">
+      ${kpis.map((k) => `
+        <div class="panel-card ${k.warn ? "panel-warn" : ""}">
+          <div class="panel-card-label">${esc(k.label)}</div>
+          <div class="panel-card-value">${esc(String(k.value))}</div>
+        </div>`).join("")}
+    </div>
+
+    <div class="panel-row">
+      <div class="panel-block">
+        <div class="panel-block-title">Destaques</div>
+        <div class="panel-line"><span>Material mais caro</span><span>${priciestMaterial ? esc(priciestMaterial.name) + " · " + fmtBRL(materialUnitCost(priciestMaterial)) + "/" + esc(priciestMaterial.unit) : "—"}</span></div>
+        <div class="panel-line"><span>Fórmula mais cara</span><span>${priciestFormula && formulaCostPerMl(priciestFormula) > 0 ? esc(priciestFormula.name) + " · " + fmtBRL(formulaCostPerMl(priciestFormula) * 100) + "/100ml" : "—"}</span></div>
+        <div class="panel-line"><span>Perfume mais caro</span><span>${priciestPerfume && priciestPerfume.cost > 0 ? esc(priciestPerfume.p.name) + " · " + fmtBRL(priciestPerfume.cost) : "—"}</span></div>
+        <div class="panel-line"><span>Próxima avaliação de maceração</span><span>${nextReady ? esc(nextReady.label) + " · " + esc(nextReady.info.label) : "nada em maceração"}</span></div>
+      </div>
+      <div class="panel-block">
+        <div class="panel-block-title">Materiais abaixo do mínimo</div>
+        ${lowStock.length === 0
+          ? `<div class="log-empty">Tudo dentro do estoque mínimo. ✓</div>`
+          : lowStock.map((it) => `<div class="panel-line"><span>⚠ ${esc(it.name)}</span><span class="low-tag">${fmt(it.quantity)}${esc(it.unit)} · mín. ${fmt(it.minStock)}${esc(it.unit)}</span></div>`).join("")}
+      </div>
+    </div>
+  `;
+}
+
+function wirePainelShell() {
+  // painel é somente leitura, sem eventos delegados por enquanto
+}
+
+/* ------------------------------ ESTOQUE TAB -------------------------------- */
+
+function lowStockAlertHtml() {
+  const low = state.items.filter((it) => it.minStock != null && it.quantity < it.minStock);
+  if (low.length === 0) return "";
+  return `
+    <div class="alert-banner">
+      <div class="alert-banner-title">⚠ Abaixo do mínimo</div>
+      <div class="alert-banner-list">
+        ${low.map((it) => `<span class="alert-chip">${esc(it.name)} · ${fmt(it.quantity)}${esc(it.unit)} (mín. ${fmt(it.minStock)}${esc(it.unit)})</span>`).join("")}
+      </div>
+    </div>`;
+}
 
 function estoqueShellHtml() {
-  return `<div class="empty"><div class="empty-title">Estoque de Materiais</div><div class="empty-sub">${state.items.length} materiais cadastrados no sistema.</div></div>`;
+  return `
+    <div id="lowStockAlert">${lowStockAlertHtml()}</div>
+    <div class="spectrum" id="spectrum"></div>
+    <div class="controls">
+      <div class="controls-row">
+        <input class="search" id="searchInput" placeholder="Buscar por nome ou CAS..." value="${esc(state.search)}" />
+        <button class="btn-primary" data-action="new-material">+ Novo material</button>
+      </div>
+      <div class="chips scroll" id="categoryChips"></div>
+      <div class="chips scroll" id="familyChips"></div>
+      <div class="chips scroll" id="positionChips"></div>
+    </div>
+    <div id="materialsGroups"></div>
+  `;
 }
 
-function formulasShellHtml() {
-  if (state.formulas.length === 0) {
-    return `<div class="empty"><div class="empty-title">Nenhuma fórmula encontrada</div></div>`;
+function wireEstoqueShell() {
+  document.getElementById("searchInput").addEventListener("input", (e) => {
+    state.search = e.target.value;
+    updateMaterialsList();
+  });
+  document.getElementById("tabContent").addEventListener("click", delegatedEstoqueClicks);
+  renderCategoryChips();
+  renderFamilyChips();
+  renderPositionChips();
+  renderSpectrum();
+  updateMaterialsList();
+}
+
+function delegatedEstoqueClicks(e) {
+  const btn = e.target.closest("[data-action]");
+  if (!btn) return;
+  const action = btn.dataset.action;
+  if (action === "new-material") openMaterialModal(null, btn.dataset.family || null);
+  else if (action === "edit-material") openMaterialModal(btn.dataset.id);
+  else if (action === "delete-material") handleDeleteMaterial(btn.dataset.id);
+  else if (action === "toggle-family") {
+    state.collapsed[btn.dataset.family] = !state.collapsed[btn.dataset.family];
+    updateMaterialsList();
+  } else if (action === "cat-filter") {
+    state.categoryFilter = btn.dataset.cat;
+    renderCategoryChips();
+    updateMaterialsList();
+  } else if (action === "fam-filter") {
+    state.familyFilter = btn.dataset.fam;
+    renderFamilyChips();
+    updateMaterialsList();
+  } else if (action === "pos-filter") {
+    state.positionFilter = btn.dataset.pos;
+    renderPositionChips();
+    updateMaterialsList();
   }
-  return `<div class="forms-grid">${state.formulas.map((f, i) => formulaCardHtml(f, i + 1)).join("")}</div>`;
+}
+
+function renderCategoryChips() {
+  const el = document.getElementById("categoryChips");
+  const chips = [{ key: "all", label: "Todas as categorias" }, ...CATEGORIES.map((c) => ({ key: c.key, label: c.label }))];
+  el.innerHTML = chips
+    .map(
+      (c) => `<button class="chip ${state.categoryFilter === c.key ? "active" : ""}" data-action="cat-filter" data-cat="${c.key}">${esc(c.label)}</button>`
+    )
+    .join("");
+}
+
+function renderFamilyChips() {
+  const el = document.getElementById("familyChips");
+  el.innerHTML =
+    `<button class="chip ${state.familyFilter === "all" ? "active" : ""}" data-action="fam-filter" data-fam="all">Todas as famílias</button>` +
+    FAMILIES.map(
+      (f) =>
+        `<button class="chip ${state.familyFilter === f.key ? "active" : ""}" data-action="fam-filter" data-fam="${f.key}"><span class="dot" style="background:${f.color}"></span>${esc(f.label)}</button>`
+    ).join("");
+}
+
+function renderSpectrum() {
+  const el = document.getElementById("spectrum");
+  if (!el) return;
+  const counts = {};
+  let total = 0;
+  FAMILIES.forEach((f) => (counts[f.key] = 0));
+  state.items.forEach((it) => { counts[it.family] = (counts[it.family] || 0) + 1; total += 1; });
+  const lowCount = state.items.filter((it) => it.minStock != null && it.quantity <= it.minStock).length;
+  const bar =
+    total === 0
+      ? `<div class="spectrum-seg" style="width:100%;background:var(--charcoal2)"></div>`
+      : FAMILIES.filter((f) => counts[f.key] > 0)
+          .map((f) => `<div class="spectrum-seg" style="width:${(counts[f.key] / total) * 100}%;background:${f.color}" title="${esc(f.label)}: ${counts[f.key]}"></div>`)
+          .join("");
+  el.innerHTML = `
+    <div class="spectrum-bar">${bar}</div>
+    <div class="spectrum-meta">
+      <span>${total} materiais cadastrados</span>
+      ${lowCount > 0 ? `<span class="low-tag">${lowCount} em estoque baixo</span>` : ""}
+    </div>
+  `;
+}
+
+function renderPositionChips() {
+  const el = document.getElementById("positionChips");
+  el.innerHTML =
+    `<button class="chip ${state.positionFilter === "all" ? "active" : ""}" data-action="pos-filter" data-pos="all">Todas as notas</button>` +
+    POSITIONS.map(
+      (p) =>
+        `<button class="chip ${state.positionFilter === p.key ? "active" : ""}" data-action="pos-filter" data-pos="${p.key}"><span class="dot" style="background:${p.color}"></span>${esc(p.label)}</button>`
+    ).join("") +
+    `<button class="chip ${state.positionFilter === "none" ? "active" : ""}" data-action="pos-filter" data-pos="none">Sem nota definida</button>`;
+}
+
+function getFilteredMaterials() {
+  const q = state.search.trim().toLowerCase();
+  return state.items.filter((it) => {
+    const matchFam = state.familyFilter === "all" || it.family === state.familyFilter;
+    const matchCat = state.categoryFilter === "all" || it.category === state.categoryFilter;
+    const matchPos =
+      state.positionFilter === "all" ||
+      (state.positionFilter === "none" ? !it.typicalPosition : it.typicalPosition === state.positionFilter);
+    const matchSearch = !q || it.name.toLowerCase().includes(q) || (it.cas || "").toLowerCase().includes(q);
+    return matchFam && matchCat && matchPos && matchSearch;
+  });
+}
+
+function updateMaterialsList() {
+  renderSpectrum();
+  const alertEl = document.getElementById("lowStockAlert");
+  if (alertEl) alertEl.innerHTML = lowStockAlertHtml();
+  const el = document.getElementById("materialsGroups");
+  if (!el) return;
+  const filtered = getFilteredMaterials();
+  if (state.items.length === 0) {
+    el.innerHTML = `
+      <div class="empty">
+        <div class="empty-title">Estoque vazio</div>
+        <div class="empty-sub">Cadastre teu primeiro material — químico, óleo essencial ou absoluto — pra organizar por família olfativa e diluição.</div>
+        <button class="btn-primary" data-action="new-material">+ Novo material</button>
+      </div>`;
+    return;
+  }
+  const grouped = {};
+  FAMILIES.forEach((f) => (grouped[f.key] = []));
+  filtered.forEach((it) => { (grouped[it.family] = grouped[it.family] || []).push(it); });
+  Object.keys(grouped).forEach((k) => grouped[k].sort((a, b) => a.name.localeCompare(b.name) || b.concentration - a.concentration));
+
+  let html = "";
+  FAMILIES.forEach((f) => {
+    const list = grouped[f.key] || [];
+    if (list.length === 0) return;
+    const isCollapsed = state.collapsed[f.key];
+    html += `
+      <section class="fam-section">
+        <button class="fam-header" data-action="toggle-family" data-family="${f.key}">
+          <span style="display:flex;align-items:center;">
+            <span class="dot" style="background:${f.color};width:9px;height:9px;"></span>
+            <span class="fam-title" style="margin-left:10px;">${esc(f.label)}</span>
+            <span class="fam-count">${list.length}</span>
+          </span>
+          <span style="color:var(--ash);font-size:12px;">${isCollapsed ? "mostrar" : "ocultar"}</span>
+        </button>
+        ${isCollapsed ? "" : `<div class="grid">${list.map((it) => materialCardHtml(it, f)).join("")}<button class="add-card" data-action="new-material" data-family="${f.key}">+ adicionar em ${esc(f.label.toLowerCase())}</button></div>`}
+      </section>`;
+  });
+  el.innerHTML = html || `<div class="empty"><div class="empty-sub">Nenhum material bate com esse filtro.</div></div>`;
+}
+
+function materialCardHtml(it, f) {
+  const low = it.minStock != null && it.quantity <= it.minStock;
+  const catLabel = catMap[it.category] ? catMap[it.category].label : "";
+  const posInfo = it.typicalPosition ? posMap[it.typicalPosition] : null;
+  return `
+    <div class="card ${low ? "card-low" : ""}">
+      <div class="card-bar" style="background:${f.color}"></div>
+      <div class="card-body">
+        <div class="card-top">
+          <div class="card-name">${esc(it.name)}</div>
+          <div class="badge">${it.concentration === 100 ? "Puro" : it.concentration + "%"}</div>
+        </div>
+        <div style="display:flex;align-items:center;gap:6px;">
+          <span style="font-size:10.5px;color:var(--ash-dim);">${esc(catLabel)}</span>
+          ${posInfo ? `<span class="badge" style="color:${posInfo.color};border-color:${posInfo.color}55;">${esc(posInfo.label)}</span>` : ""}
+        </div>
+        <div class="card-qty">${fmt(it.quantity)} <span style="color:var(--ash);font-size:12px;">${esc(it.unit)}</span></div>
+        ${it.minStock != null ? `<div class="card-min ${low ? "low" : ""}">mínimo: ${fmt(it.minStock)} ${esc(it.unit)}</div>` : ""}
+        <div class="card-meta">
+          ${it.solvent ? `<span>Diluente: ${esc(it.solvent)}</span>` : ""}
+          ${it.cas ? `<span style="font-family:'JetBrains Mono',monospace">CAS ${esc(it.cas)}</span>` : ""}
+          ${it.supplier ? `<span>${esc(it.supplier)}</span>` : ""}
+        </div>
+        ${it.notes ? `<div class="card-notes">${esc(it.notes)}</div>` : ""}
+        ${materialHasCost(it) ? `<div class="card-cost">${fmtBRL(materialUnitCost(it))}/${esc(it.unit)}</div>` : ""}
+        <div class="card-actions">
+          <button class="btn-text" data-action="edit-material" data-id="${it.id}">editar</button>
+          <button class="btn-text danger" data-action="delete-material" data-id="${it.id}">remover</button>
+        </div>
+      </div>
+    </div>`;
+}
+
+async function handleDeleteMaterial(id) {
+  if (!confirm("Remover esse material do estoque?")) return;
+  await deleteItem(id);
+  updateMaterialsList();
+}
+
+/* --------------------------- MODAL: MATERIAL ------------------------------ */
+
+function openMaterialModal(editId, presetFamily) {
+  const editing = editId ? state.items.find((it) => it.id === editId) : null;
+  const isCustomConc = editing && !CONCENTRATIONS.includes(editing.concentration);
+
+  const root = document.getElementById("modalRoot");
+  root.innerHTML = `
+    <div class="overlay" id="overlay">
+      <form class="modal" id="materialForm">
+        <div class="modal-title">${editing ? "Editar material" : "Novo material"}</div>
+
+        <label class="label">Nome</label>
+        <input class="input" id="f-name" value="${editing ? esc(editing.name) : ""}" placeholder="Ex: Iso E Super" />
+        <div class="family-hint" id="familyHint" style="display:none;"></div>
+
+        <div class="row2">
+          <div>
+            <label class="label">Categoria</label>
+            <select class="input" id="f-category">
+              ${CATEGORIES.map((c) => `<option value="${c.key}" ${editing && editing.category === c.key ? "selected" : ""}>${esc(c.label)}</option>`).join("")}
+            </select>
+          </div>
+          <div>
+            <label class="label">Família olfativa</label>
+            <select class="input" id="f-family">
+              ${FAMILIES.map((f) => `<option value="${f.key}" ${(editing ? editing.family : presetFamily) === f.key ? "selected" : ""}>${esc(f.label)}</option>`).join("")}
+            </select>
+          </div>
+        </div>
+
+        <label class="label">Nota característica (método Jean Carles)</label>
+        <select class="input" id="f-typicalPosition">
+          <option value="">— não definida —</option>
+          ${POSITIONS.map((p) => `<option value="${p.key}" ${editing && editing.typicalPosition === p.key ? "selected" : ""}>${esc(p.label)}</option>`).join("")}
+        </select>
+
+        <div class="row2">
+          <div>
+            <label class="label">Concentração</label>
+            <select class="input" id="f-concentration">
+              <option value="100" ${!isCustomConc && (!editing || editing.concentration === 100) ? "selected" : ""}>Puro (100%)</option>
+              <option value="50" ${editing && editing.concentration === 50 ? "selected" : ""}>Diluído 50%</option>
+              <option value="10" ${editing && editing.concentration === 10 ? "selected" : ""}>Diluído 10%</option>
+              <option value="1" ${editing && editing.concentration === 1 ? "selected" : ""}>Diluído 1%</option>
+              <option value="custom" ${isCustomConc ? "selected" : ""}>Outra %</option>
+            </select>
+          </div>
+          <div id="customConcWrap" style="${isCustomConc ? "" : "display:none;"}">
+            <label class="label">Qual %?</label>
+            <input class="input" id="f-customConc" type="number" step="0.1" value="${isCustomConc ? editing.concentration : ""}" />
+          </div>
+        </div>
+
+        <div class="row2">
+          <div>
+            <label class="label">Quantidade</label>
+            <input class="input" id="f-quantity" type="number" step="0.01" value="${editing ? editing.quantity : ""}" />
+          </div>
+          <div>
+            <label class="label">Unidade</label>
+            <select class="input" id="f-unit">
+              <option value="g" ${!editing || editing.unit === "g" ? "selected" : ""}>gramas (g)</option>
+              <option value="ml" ${editing && editing.unit === "ml" ? "selected" : ""}>mililitros (ml)</option>
+            </select>
+          </div>
+        </div>
+
+        <label class="label">Estoque mínimo (opcional)</label>
+        <input class="input" id="f-minStock" type="number" step="0.01" value="${editing && editing.minStock != null ? editing.minStock : ""}" placeholder="Alerta quando abaixo deste valor" />
+
+        <div class="row2">
+          <div>
+            <label class="label">Diluente (se aplicável)</label>
+            <input class="input" id="f-solvent" value="${editing ? esc(editing.solvent) : ""}" placeholder="Ex: DPG, IPM, álcool" />
+          </div>
+          <div>
+            <label class="label">CAS (opcional)</label>
+            <input class="input" id="f-cas" value="${editing ? esc(editing.cas) : ""}" />
+          </div>
+        </div>
+
+        <label class="label">Fornecedor</label>
+        <input class="input" id="f-supplier" value="${editing ? esc(editing.supplier) : ""}" placeholder="Ex: euperfumista, Perfumoteca, Laszlo" />
+
+        <div class="cost-fieldset">
+          <div class="cost-fieldset-title">Custo (MÓDULO 13)</div>
+          <div class="row2">
+            <div>
+              <label class="label" style="margin-top:0;">Preço pago (R$)</label>
+              <input class="input" id="f-pricePaid" type="number" step="0.01" value="${editing && editing.pricePaid != null ? editing.pricePaid : ""}" placeholder="Ex: 120,00" />
+            </div>
+            <div>
+              <label class="label" style="margin-top:0;">Quantidade comprada (${"" /* unidade abaixo */}<span id="f-purchaseUnitLabel">${editing ? esc(editing.unit) : "g"}</span>)</label>
+              <input class="input" id="f-quantityPurchased" type="number" step="0.01" value="${editing && editing.quantityPurchased != null ? editing.quantityPurchased : ""}" placeholder="Ex: 250" />
+            </div>
+          </div>
+          <div class="row2">
+            <div>
+              <label class="label">Data da compra</label>
+              <input class="input" id="f-purchaseDate" type="date" value="${editing && editing.purchaseDate ? editing.purchaseDate : ""}" />
+            </div>
+            <div>
+              <label class="label">Custo unitário (calculado)</label>
+              <div class="input" id="f-unitCostPreview" style="display:flex;align-items:center;color:var(--gold);">${editing && materialHasCost(editing) ? fmtBRL(materialUnitCost(editing)) + "/" + esc(editing.unit) : "—"}</div>
+            </div>
+          </div>
+        </div>
+
+        <label class="label">Notas</label>
+        <textarea class="input" id="f-notes" style="min-height:60px;resize:vertical;">${editing ? esc(editing.notes) : ""}</textarea>
+
+        <div class="form-error" id="formError" style="display:none;"></div>
+
+        <div class="modal-actions">
+          <button type="button" class="btn-ghost" data-action="close-modal">Cancelar</button>
+          <button type="submit" class="btn-primary">${editing ? "Salvar alterações" : "Adicionar material"}</button>
+        </div>
+      </form>
+    </div>
+  `;
+
+  let familyTouched = !!editing || !!presetFamily;
+
+  document.getElementById("overlay").addEventListener("click", (e) => {
+    if (e.target.id === "overlay") closeModal();
+  });
+  document.getElementById("materialForm").addEventListener("click", (e) => e.stopPropagation());
+  root.querySelector('[data-action="close-modal"]').addEventListener("click", closeModal);
+
+  document.getElementById("f-name").addEventListener("input", (e) => {
+    if (familyTouched) return;
+    const guess = guessFamily(e.target.value);
+    const hint = document.getElementById("familyHint");
+    if (guess) {
+      document.getElementById("f-family").value = guess;
+      hint.style.display = "block";
+      hint.innerHTML = `família detectada: <strong>${esc(famMap[guess].label)}</strong> · pode trocar abaixo se quiser`;
+    } else {
+      hint.style.display = "none";
+    }
+  });
+  document.getElementById("f-family").addEventListener("change", () => {
+    familyTouched = true;
+    document.getElementById("familyHint").style.display = "none";
+  });
+  document.getElementById("f-concentration").addEventListener("change", (e) => {
+    document.getElementById("customConcWrap").style.display = e.target.value === "custom" ? "" : "none";
+  });
+
+  const updateCostPreview = () => {
+    const paid = parseFloat(document.getElementById("f-pricePaid").value);
+    const qty = parseFloat(document.getElementById("f-quantityPurchased").value);
+    const unit = document.getElementById("f-unit").value;
+    const preview = document.getElementById("f-unitCostPreview");
+    if (Number.isFinite(paid) && Number.isFinite(qty) && qty > 0) {
+      preview.textContent = fmtBRL(paid / qty) + "/" + unit;
+    } else {
+      preview.textContent = "—";
+    }
+  };
+  document.getElementById("f-pricePaid").addEventListener("input", updateCostPreview);
+  document.getElementById("f-quantityPurchased").addEventListener("input", updateCostPreview);
+  document.getElementById("f-unit").addEventListener("change", (e) => {
+    document.getElementById("f-purchaseUnitLabel").textContent = e.target.value;
+    updateCostPreview();
+  });
+
+  document.getElementById("materialForm").addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const name = document.getElementById("f-name").value.trim();
+    const quantityRaw = document.getElementById("f-quantity").value;
+    const errEl = document.getElementById("formError");
+    if (!name) { errEl.textContent = "Dá um nome pro material antes de salvar."; errEl.style.display = "block"; return; }
+    if (quantityRaw === "" || isNaN(parseFloat(quantityRaw))) { errEl.textContent = "Preenche a quantidade (pode ser 0 se ainda não tiver)."; errEl.style.display = "block"; return; }
+    errEl.style.display = "none";
+
+    const concSel = document.getElementById("f-concentration").value;
+    const conc = concSel === "custom" ? parseFloat(document.getElementById("f-customConc").value) || 0 : parseFloat(concSel);
+    const minStockRaw = document.getElementById("f-minStock").value;
+
+    const record = {
+      name,
+      category: document.getElementById("f-category").value,
+      family: document.getElementById("f-family").value,
+      typicalPosition: document.getElementById("f-typicalPosition").value || null,
+      concentration: conc,
+      unit: document.getElementById("f-unit").value,
+      quantity: parseFloat(quantityRaw) || 0,
+      minStock: minStockRaw === "" ? null : parseFloat(minStockRaw),
+      solvent: document.getElementById("f-solvent").value.trim(),
+      cas: document.getElementById("f-cas").value.trim(),
+      supplier: document.getElementById("f-supplier").value.trim(),
+      notes: document.getElementById("f-notes").value.trim(),
+      pricePaid: document.getElementById("f-pricePaid").value === "" ? null : parseFloat(document.getElementById("f-pricePaid").value),
+      quantityPurchased: document.getElementById("f-quantityPurchased").value === "" ? null : parseFloat(document.getElementById("f-quantityPurchased").value),
+      purchaseDate: document.getElementById("f-purchaseDate").value || null,
+    };
+
+    const ok = editing ? await updateItem(editing.id, record) : await addItem(record);
+    if (ok) { closeModal(); updateMaterialsList(); }
+  });
+}
+
+function closeModal() {
+  document.getElementById("modalRoot").innerHTML = "";
+}
+
+/* ------------------------------- FORMULAS TAB ------------------------------ */
+
+function formulasShellHtml() {
+  return `
+    <div class="form-header">
+      <span class="form-count">${state.formulas.length} fórmula${state.formulas.length === 1 ? "" : "s"} registrada${state.formulas.length === 1 ? "" : "s"}</span>
+      <button class="btn-primary" data-action="new-formula">+ Nova fórmula</button>
+    </div>
+    <div id="formulasGrid"></div>
+  `;
+}
+
+function wireFormulasShell() {
+  document.getElementById("tabContent").addEventListener("click", delegatedFormulasClicks);
+  renderFormulasGrid();
+}
+
+function delegatedFormulasClicks(e) {
+  const btn = e.target.closest("[data-action]");
+  if (!btn) return;
+  const action = btn.dataset.action;
+  if (action === "new-formula") openFormulaModal(null);
+  else if (action === "edit-formula") openFormulaModal(btn.dataset.id);
+  else if (action === "delete-formula") handleDeleteFormula(btn.dataset.id);
+  else if (action === "produce-batch") openProduceBatchModal(btn.dataset.id);
+  else if (action === "toggle-calc") {
+    const id = btn.dataset.id;
+    calcState[id] = calcState[id] || { open: false, batchSize: "10", concPct: btn.dataset.defaultpct };
+    calcState[id].open = !calcState[id].open;
+    renderFormulasGrid();
+  }
+}
+
+function renderFormulasGrid() {
+  const el = document.getElementById("formulasGrid");
+  if (!el) return;
+  const sorted = [...state.formulas].sort((a, b) => a.createdAt - b.createdAt);
+  if (sorted.length === 0) {
+    el.innerHTML = `
+      <div class="empty">
+        <div class="empty-title">Nenhuma criação registrada</div>
+        <div class="empty-sub">Cadastre a fórmula de uma criação: os materiais, a posição de cada um na pirâmide olfativa e a concentração final do frasco.</div>
+        <button class="btn-primary" data-action="new-formula">+ Nova fórmula</button>
+      </div>`;
+    return;
+  }
+  el.innerHTML = `<div class="forms-grid">${sorted.map((f, i) => formulaCardHtml(f, i + 1)).join("")}</div>`;
+  sorted.forEach((f) => wireCalculator(f));
 }
 
 function formulaCardHtml(formula, number) {
-  const maxProdMl = CostsService.calcMaxProduction(formula, state.items);
-  const cost100ml = CostsService.calcFormulaCostForVolume(formula, state.items, 100);
+  const sums = { topo: 0, coracao: 0, fundo: 0 };
+  formula.materials.forEach((m) => { sums[m.position] = (sums[m.position] || 0) + m.percentage; });
+  const totalPct = formula.materials.reduce((a, m) => a + m.percentage, 0);
+  const totalOk = totalPct >= 99 && totalPct <= 101;
+  const cs = calcState[formula.id] || { open: false, batchSize: "10", concPct: String(formula.concentrationPct) };
+  calcState[formula.id] = cs;
+
+  const pyramidHtml = POSITIONS.map((p) =>
+    sums[p.key] > 0
+      ? `<div class="pyramid-seg" style="width:${(sums[p.key] / (totalPct || 1)) * 100}%;background:${p.color}">${Math.round(sums[p.key])}%</div>`
+      : ""
+  ).join("");
+
+  const matListHtml = formula.materials
+    .map(
+      (m) => `
+      <div class="mat-row">
+        <span class="dot" style="background:${famMap[m.family] ? famMap[m.family].color : "#888"}"></span>
+        <span class="mat-name">${esc(m.name)}${m.concLabel ? " · " + esc(m.concLabel) : ""}</span>
+        <span class="mat-pct">${fmt(m.percentage)}%</span>
+      </div>`
+    )
+    .join("");
+
+  const batch = parseFloat(cs.batchSize) || 0;
+  const conc = parseFloat(cs.concPct) || 0;
+  const compoundTotal = (batch * conc) / 100;
+  const diluent = batch - compoundTotal;
+  const calcRows = formula.materials
+    .map((m) => {
+      const needed = (compoundTotal * m.percentage) / 100;
+      const inv = m.inventoryId ? state.items.find((it) => it.id === m.inventoryId) : null;
+      const insufficient = inv && inv.quantity < needed;
+      return `<div class="calc-result-row"><span style="color:var(--ash)">${esc(m.name)}</span><span class="${insufficient ? "insufficient" : ""}">${fmt(needed)}${inv ? esc(inv.unit) : "g"}${insufficient ? " · tem só " + fmt(inv.quantity) + esc(inv.unit) : ""}</span></div>`;
+    })
+    .join("");
 
   return `
     <div class="fcard" data-formula-id="${formula.id}">
       <div class="fcard-eyebrow">
         <span class="fcard-num">Fórmula N° ${String(number).padStart(3, "0")}</span>
-        <span class="max-production-badge">Max: ${maxProdMl} ml</span>
+        <span class="fcard-type">${esc(formula.concentrationType)} · ${fmt(formula.concentrationPct)}%</span>
       </div>
-      <div class="fcard-name">${esc(formula.name)}</div>
-      <div class="fcard-concept">${esc(formula.concept || "")}</div>
-      <div style="font-size:12px;color:var(--gold);margin-top:6px;font-family:'JetBrains Mono',monospace;">
-        Custo p/ 100ml: R$ ${cost100ml.toFixed(2)}
+      <div>
+        <div class="fcard-name">${esc(formula.name)}</div>
+        ${formula.concept ? `<div class="fcard-concept">${esc(formula.concept)}</div>` : ""}
       </div>
-      <div class="fcard-actions" style="margin-top:14px;display:flex;gap:10px;">
-        <button class="btn-primary" data-action="produce-batch" data-id="${formula.id}">+ Produzir Lote</button>
+      <div>
+        <div class="pyramid-label"><span>Topo</span><span>Coração</span><span>Fundo</span></div>
+        <div class="pyramid-bar">${pyramidHtml}</div>
+      </div>
+      <div class="fcard-total">
+        <span>${formula.materials.length} material${formula.materials.length === 1 ? "" : "es"}</span>
+        <span class="${totalOk ? "total-ok" : "total-warn"}">total ${fmt(totalPct)}% ${!totalOk ? "· ajustar p/ 100%" : ""}</span>
+      </div>
+      <div class="mat-list">${matListHtml}</div>
+      ${formulaCostBoxHtml(formula)}
+      <button class="calc-toggle" data-action="toggle-calc" data-id="${formula.id}" data-defaultpct="${formula.concentrationPct}">${cs.open ? "▾" : "▸"} calculadora de lote</button>
+      <div class="calc-box ${cs.open ? "" : "hidden"}" id="calcBox-${formula.id}">
+        <div class="calc-inputs">
+          <div><label>tamanho do frasco (ml)</label><input type="number" step="0.1" id="batchSize-${formula.id}" value="${esc(cs.batchSize)}" /></div>
+          <div><label>concentração (%)</label><input type="number" step="0.1" id="concPct-${formula.id}" value="${esc(cs.concPct)}" /></div>
+        </div>
+        <div class="calc-result-row"><span>composto (óleo)</span><span>${fmt(compoundTotal)} ml</span></div>
+        <div class="calc-result-row"><span>álcool / diluente</span><span>${fmt(diluent)} ml</span></div>
+        <div style="border-top:1px solid var(--hair-soft);padding-top:8px;display:flex;flex-direction:column;gap:6px;">${calcRows}</div>
+        <div class="calc-note">cálculo assume densidade ≈ 1 (1ml ≈ 1g)</div>
+      </div>
+      <div class="fcard-actions">
+        <div class="fcard-actions-left">
+          <button class="btn-text" data-action="edit-formula" data-id="${formula.id}">editar</button>
+          <button class="btn-text danger" data-action="delete-formula" data-id="${formula.id}">remover</button>
+        </div>
+        <button class="btn-primary small" data-action="produce-batch" data-id="${formula.id}">Produzir lote</button>
       </div>
     </div>`;
 }
 
-function acordesShellHtml() {
-  return `<div class="empty"><div class="empty-title">Acordes em Teste</div></div>`;
+// MÓDULO 15 (custo por volume) + MÓDULO 12 (produção máxima possível)
+function formulaCostBoxHtml(formula) {
+  const perMl = formulaCostPerMl(formula);
+  const incomplete = formulaCostIncomplete(formula);
+  const { max, limiting } = formulaMaxBatch(formula);
+  const volumes = [4, 10, 30, 50, 100];
+  if (perMl <= 0 && !incomplete) return "";
+  return `
+    <div class="cost-box">
+      <div class="cost-box-title">Custo da fórmula ${incomplete ? '<span class="cost-incomplete">· custo incompleto (falta preço de compra em algum material)</span>' : ""}</div>
+      <div class="cost-vols">
+        ${volumes.map((v) => `<div class="cost-vol"><span>${v}ml</span><span>${fmtBRL(perMl * v)}</span></div>`).join("")}
+      </div>
+      ${max != null ? `<div class="calc-note">produção máxima possível: <strong style="color:var(--gold)">${fmt(max)} ml</strong> — limitado por ${esc(limiting)}</div>` : ""}
+    </div>`;
 }
 
-function perfumesShellHtml() {
-  return `<div class="empty"><div class="empty-title">Perfumes e Propostas</div></div>`;
+function wireCalculator(formula) {
+  const batchInput = document.getElementById("batchSize-" + formula.id);
+  const concInput = document.getElementById("concPct-" + formula.id);
+  if (!batchInput || !concInput) return;
+  const update = () => {
+    calcState[formula.id].batchSize = batchInput.value;
+    calcState[formula.id].concPct = concInput.value;
+    updateCalcResultsOnly(formula);
+  };
+  batchInput.addEventListener("input", update);
+  concInput.addEventListener("input", update);
 }
+
+function updateCalcResultsOnly(formula) {
+  const box = document.getElementById("calcBox-" + formula.id);
+  if (!box) return;
+  const cs = calcState[formula.id];
+  const batch = parseFloat(cs.batchSize) || 0;
+  const conc = parseFloat(cs.concPct) || 0;
+  const compoundTotal = (batch * conc) / 100;
+  const diluent = batch - compoundTotal;
+  const rows = box.querySelectorAll(".calc-result-row");
+  // rows[0] = composto, rows[1] = álcool, rows[2..] = materiais
+  if (rows[0]) rows[0].querySelector("span:last-child").textContent = fmt(compoundTotal) + " ml";
+  if (rows[1]) rows[1].querySelector("span:last-child").textContent = fmt(diluent) + " ml";
+  formula.materials.forEach((m, i) => {
+    const row = rows[2 + i];
+    if (!row) return;
+    const needed = (compoundTotal * m.percentage) / 100;
+    const inv = m.inventoryId ? state.items.find((it) => it.id === m.inventoryId) : null;
+    const insufficient = inv && inv.quantity < needed;
+    const span = row.querySelector("span:last-child");
+    span.textContent = fmt(needed) + (inv ? inv.unit : "g") + (insufficient ? " · tem só " + fmt(inv.quantity) + inv.unit : "");
+    span.className = insufficient ? "insufficient" : "";
+  });
+}
+
+async function handleDeleteFormula(id) {
+  if (!confirm("Remover essa fórmula?")) return;
+  await deleteFormula(id);
+  renderFormulasGrid();
+}
+
+/* --------------------------- MODAL: FORMULA -------------------------------- */
+
+let formulaRows = [];
+
+function openFormulaModal(editId) {
+  const editing = editId ? state.formulas.find((f) => f.id === editId) : null;
+  formulaRows = editing
+    ? editing.materials.map((m) => ({ rowId: uid(), inventoryId: m.inventoryId || "", name: m.name, family: m.family, concLabel: m.concLabel || "", position: m.position, percentage: String(m.percentage) }))
+    : [{ rowId: uid(), inventoryId: "", name: "", family: "citrico", concLabel: "", position: "coracao", percentage: "" }];
+
+  const root = document.getElementById("modalRoot");
+  root.innerHTML = `
+    <div class="overlay" id="overlay">
+      <form class="modal modal-wide" id="formulaForm">
+        <div class="modal-title">${editing ? "Editar fórmula" : "Nova fórmula"}</div>
+
+        <label class="label">Nome da criação</label>
+        <input class="input" id="ff-name" value="${editing ? esc(editing.name) : ""}" placeholder="Ex: Brasa de Mel" />
+
+        <label class="label">Conceito / inspiração</label>
+        <input class="input" id="ff-concept" value="${editing ? esc(editing.concept) : ""}" placeholder="Uma linha sobre a ideia por trás da fragrância" />
+
+        <div class="row2">
+          <div>
+            <label class="label">Tipo / concentração final</label>
+            <select class="input" id="ff-concType">
+              ${CONC_PRESETS.map((p) => `<option value="${esc(p.label)}" ${(editing ? editing.concentrationType : "Eau de Parfum") === p.label ? "selected" : ""}>${esc(p.label)}</option>`).join("")}
+            </select>
+          </div>
+          <div>
+            <label class="label">% do óleo no frasco final</label>
+            <input class="input" id="ff-concPct" type="number" step="0.1" value="${editing ? editing.concentrationPct : "18"}" />
+          </div>
+        </div>
+
+        <label class="label" style="margin-top:16px;">Materiais da fórmula (% do composto, soma ideal = 100%)</label>
+        <div id="rowsContainer"></div>
+        <button type="button" class="add-row-btn" id="addRowBtn">+ adicionar material</button>
+
+        <label class="label">Notas</label>
+        <textarea class="input" id="ff-notes" style="min-height:60px;resize:vertical;">${editing ? esc(editing.notes) : ""}</textarea>
+
+        <div class="form-error" id="formulaFormError" style="display:none;"></div>
+
+        <div class="modal-actions">
+          <button type="button" class="btn-ghost" data-action="close-modal">Cancelar</button>
+          <button type="submit" class="btn-primary">${editing ? "Salvar alterações" : "Adicionar fórmula"}</button>
+        </div>
+      </form>
+    </div>
+  `;
+
+  document.getElementById("overlay").addEventListener("click", (e) => { if (e.target.id === "overlay") closeModal(); });
+  document.getElementById("formulaForm").addEventListener("click", (e) => e.stopPropagation());
+  root.querySelector('[data-action="close-modal"]').addEventListener("click", closeModal);
+
+  document.getElementById("ff-concType").addEventListener("change", (e) => {
+    const preset = CONC_PRESETS.find((p) => p.label === e.target.value);
+    if (preset && preset.pct != null) document.getElementById("ff-concPct").value = preset.pct;
+  });
+
+  renderFormulaRows();
+  document.getElementById("addRowBtn").addEventListener("click", () => {
+    formulaRows.push({ rowId: uid(), inventoryId: "", name: "", family: "citrico", concLabel: "", position: "coracao", percentage: "" });
+    renderFormulaRows();
+  });
+
+  document.getElementById("formulaForm").addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const name = document.getElementById("ff-name").value.trim();
+    const errEl = document.getElementById("formulaFormError");
+    const validRows = formulaRows.filter((r) => (document.getElementById("row-name-" + r.rowId) ? document.getElementById("row-name-" + r.rowId).value.trim() : r.name.trim()));
+    if (!name) { errEl.textContent = "Dá um nome pra criação antes de salvar."; errEl.style.display = "block"; return; }
+    if (validRows.length === 0) { errEl.textContent = "Adiciona pelo menos um material com nome preenchido."; errEl.style.display = "block"; return; }
+    errEl.style.display = "none";
+
+    const materials = formulaRows
+      .map((r) => {
+        const invSelect = document.getElementById("row-inv-" + r.rowId);
+        const nameInput = document.getElementById("row-name-" + r.rowId);
+        const famSelect = document.getElementById("row-fam-" + r.rowId);
+        const posSelect = document.getElementById("row-pos-" + r.rowId);
+        const pctInput = document.getElementById("row-pct-" + r.rowId);
+        const inventoryId = invSelect ? invSelect.value : "";
+        let rname, rfamily, rconcLabel;
+        if (inventoryId) {
+          const inv = state.items.find((it) => it.id === inventoryId);
+          rname = inv ? inv.name : "";
+          rfamily = inv ? inv.family : "citrico";
+          rconcLabel = inv ? (inv.concentration === 100 ? "Puro" : inv.concentration + "%") : "";
+        } else {
+          rname = nameInput ? nameInput.value.trim() : "";
+          rfamily = famSelect ? famSelect.value : "citrico";
+          rconcLabel = "";
+        }
+        return {
+          id: uid(),
+          inventoryId: inventoryId || null,
+          name: rname,
+          family: rfamily,
+          concLabel: rconcLabel,
+          position: posSelect ? posSelect.value : "coracao",
+          percentage: parseFloat(pctInput ? pctInput.value : 0) || 0,
+        };
+      })
+      .filter((m) => m.name);
+
+    const record = {
+      name,
+      concept: document.getElementById("ff-concept").value.trim(),
+      concentrationType: document.getElementById("ff-concType").value,
+      concentrationPct: parseFloat(document.getElementById("ff-concPct").value) || 0,
+      materials,
+      notes: document.getElementById("ff-notes").value.trim(),
+    };
+
+    const ok = editing ? await updateFormula(editing.id, record) : await addFormula(record);
+    if (ok) { closeModal(); renderFormulasGrid(); }
+  });
+}
+
+/* --------------------------- MODAL: PRODUZIR LOTE (MÓDULOS 1-4) ------------ */
+
+function openProduceBatchModal(formulaId) {
+  const formula = state.formulas.find((f) => f.id === formulaId);
+  if (!formula) return;
+  const { max } = formulaMaxBatch(formula);
+
+  const root = document.getElementById("modalRoot");
+  root.innerHTML = `
+    <div class="overlay" id="overlay">
+      <form class="modal" id="batchForm">
+        <div class="modal-title">Produzir lote: ${esc(formula.name)}</div>
+        ${max != null ? `<div class="calc-note" style="margin-bottom:10px;">produção máxima possível com o estoque atual: <strong style="color:var(--gold)">${fmt(max)} ml</strong></div>` : ""}
+
+        <label class="label" style="margin-top:0;">Quantidade desejada (ml)</label>
+        <input class="input" id="pb-quantity" type="number" step="0.1" value="${max != null && max > 0 ? Math.min(100, Math.floor(max)) : 100}" />
+
+        <label class="label">Tipo</label>
+        <select class="input" id="pb-type">
+          <option value="teste">Teste</option>
+          <option value="producao">Produção</option>
+        </select>
+
+        <label class="label">Maceração</label>
+        <select class="input" id="pb-maturation">
+          <option value="15">15 dias</option>
+          <option value="30" selected>30 dias</option>
+          <option value="45">45 dias</option>
+          <option value="60">60 dias</option>
+          <option value="custom">Outro</option>
+        </select>
+        <input class="input" id="pb-maturationCustom" type="number" step="1" style="display:none;margin-top:6px;" placeholder="dias" />
+
+        <label class="label">Observações</label>
+        <textarea class="input" id="pb-notes" style="min-height:60px;resize:vertical;"></textarea>
+
+        <div id="pb-preview"></div>
+        <div class="form-error" id="batchFormError" style="display:none;"></div>
+
+        <div class="modal-actions">
+          <button type="button" class="btn-ghost" data-action="close-modal">Cancelar</button>
+          <button type="submit" class="btn-primary">Confirmar produção</button>
+        </div>
+      </form>
+    </div>`;
+
+  document.getElementById("overlay").addEventListener("click", (e) => { if (e.target.id === "overlay") closeModal(); });
+  document.getElementById("batchForm").addEventListener("click", (e) => e.stopPropagation());
+  root.querySelector('[data-action="close-modal"]').addEventListener("click", closeModal);
+
+  document.getElementById("pb-maturation").addEventListener("change", (e) => {
+    document.getElementById("pb-maturationCustom").style.display = e.target.value === "custom" ? "" : "none";
+  });
+
+  const updatePreview = () => {
+    const qty = parseFloat(document.getElementById("pb-quantity").value) || 0;
+    const needs = computeFormulaNeeds(formula, qty, formula.concentrationPct);
+    const totalCost = needs.reduce((a, n) => a + n.cost, 0);
+    document.getElementById("pb-preview").innerHTML = `
+      <div class="cost-box" style="margin-top:4px;">
+        <div class="cost-box-title">MÓDULO 2 — cálculo automático dos ingredientes</div>
+        ${needs.map((n) => `<div class="calc-result-row"><span style="color:var(--ash)">${esc(n.name)}</span><span class="${n.materialId && n.available != null && n.available < n.needed ? "insufficient" : ""}">${fmt(n.needed)}${esc(n.unit)}${n.materialId && n.available != null ? " · tem " + fmt(n.available) + esc(n.unit) : ""}</span></div>`).join("")}
+        <div class="calc-result-row" style="border-top:1px solid var(--hair-soft);padding-top:6px;"><span>custo total estimado</span><span>${fmtBRL(totalCost)}</span></div>
+      </div>`;
+  };
+  document.getElementById("pb-quantity").addEventListener("input", updatePreview);
+  updatePreview();
+
+  document.getElementById("batchForm").addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const errEl = document.getElementById("batchFormError");
+    const quantityMl = parseFloat(document.getElementById("pb-quantity").value) || 0;
+    if (quantityMl <= 0) { errEl.textContent = "Informa uma quantidade válida."; errEl.style.display = "block"; return; }
+    const maturationSel = document.getElementById("pb-maturation").value;
+    const maturationDays = maturationSel === "custom" ? parseFloat(document.getElementById("pb-maturationCustom").value) || 30 : parseFloat(maturationSel);
+    const batchType = document.getElementById("pb-type").value;
+    const notes = document.getElementById("pb-notes").value.trim();
+
+    const result = await produceBatch(formula, { quantityMl, batchType, maturationDays, notes });
+    if (!result.ok) {
+      if (result.shortages.length > 0) {
+        errEl.innerHTML =
+          `<strong>Estoque insuficiente.</strong><br>` +
+          result.shortages.map((s) => `${esc(s.name)}: necessário ${fmt(s.needed)}${esc(s.unit)}, disponível ${fmt(s.available)}${esc(s.unit)}`).join("<br>");
+        errEl.style.display = "block";
+      } else {
+        errEl.textContent = "Não consegui produzir o lote. Tenta de novo.";
+        errEl.style.display = "block";
+      }
+      return;
+    }
+    closeModal();
+    renderFormulasGrid();
+    let msg = `Lote ${result.batch.code} produzido — estoque atualizado.`;
+    if (result.lowStockHits.length > 0) msg += ` ⚠ Abaixo do mínimo: ${result.lowStockHits.join(", ")}.`;
+    showToast(msg, true);
+  });
+}
+
+function inventoryOptionsHtml(selectedId) {
+  let html = `<option value="">— digitar manualmente —</option>`;
+  FAMILIES.forEach((fam) => {
+    const opts = state.items.filter((it) => it.family === fam.key);
+    if (opts.length === 0) return;
+    html += `<optgroup label="${esc(fam.label)}">`;
+    opts.forEach((it) => {
+      const posLabel = it.typicalPosition && posMap[it.typicalPosition] ? ` · ${posMap[it.typicalPosition].label}` : "";
+      html += `<option value="${it.id}" ${selectedId === it.id ? "selected" : ""}>${esc(it.name)} — ${it.concentration === 100 ? "puro" : it.concentration + "%"}${posLabel} (${fmt(it.quantity)}${esc(it.unit)} em estoque)</option>`;
+    });
+    html += `</optgroup>`;
+  });
+  return html;
+}
+
+function renderFormulaRows() {
+  const container = document.getElementById("rowsContainer");
+  container.innerHTML = formulaRows
+    .map(
+      (row, i) => `
+      <div class="mat-editor" data-row="${row.rowId}">
+        <div class="mat-editor-top">
+          <span class="mat-editor-idx">material ${String(i + 1).padStart(2, "0")}</span>
+          ${formulaRows.length > 1 ? `<button type="button" class="remove-row" data-remove="${row.rowId}">remover</button>` : ""}
+        </div>
+        <select class="input" id="row-inv-${row.rowId}">${inventoryOptionsHtml(row.inventoryId)}</select>
+        <div class="manual-fields-${row.rowId}" style="${row.inventoryId ? "display:none;" : ""}">
+          <div class="row2">
+            <input class="input" id="row-name-${row.rowId}" placeholder="Nome do material" value="${esc(row.name)}" />
+            <select class="input" id="row-fam-${row.rowId}">
+              ${FAMILIES.map((fam) => `<option value="${fam.key}" ${row.family === fam.key ? "selected" : ""}>${esc(fam.label)}</option>`).join("")}
+            </select>
+          </div>
+        </div>
+        <div class="row2">
+          <div>
+            <label class="label" style="margin-top:0;">Posição</label>
+            <select class="input" id="row-pos-${row.rowId}">
+              ${POSITIONS.map((p) => `<option value="${p.key}" ${row.position === p.key ? "selected" : ""}>${esc(p.label)}</option>`).join("")}
+            </select>
+          </div>
+          <div>
+            <label class="label" style="margin-top:0;">% na fórmula</label>
+            <input class="input" id="row-pct-${row.rowId}" type="number" step="0.01" value="${esc(row.percentage)}" />
+          </div>
+        </div>
+      </div>`
+    )
+    .join("");
+
+  formulaRows.forEach((row) => {
+    const invSelect = document.getElementById("row-inv-" + row.rowId);
+    invSelect.addEventListener("change", () => {
+      const wrap = container.querySelector(".manual-fields-" + row.rowId);
+      wrap.style.display = invSelect.value ? "none" : "";
+      if (invSelect.value) {
+        const inv = state.items.find((it) => it.id === invSelect.value);
+        if (inv && inv.typicalPosition) {
+          const posSelect = document.getElementById("row-pos-" + row.rowId);
+          if (posSelect) posSelect.value = inv.typicalPosition;
+        }
+      }
+    });
+    const removeBtn = container.querySelector(`[data-remove="${row.rowId}"]`);
+    if (removeBtn) {
+      removeBtn.addEventListener("click", () => {
+        formulaRows = formulaRows.filter((r) => r.rowId !== row.rowId);
+        renderFormulaRows();
+      });
+    }
+    const nameInput = document.getElementById("row-name-" + row.rowId);
+    if (nameInput) {
+      nameInput.addEventListener("input", (e) => {
+        const guess = guessFamily(e.target.value);
+        if (guess) document.getElementById("row-fam-" + row.rowId).value = guess;
+      });
+    }
+  });
+}
+
+/* -------------------------------- MATURAÇÃO UI ------------------------------ */
+
+function maturityBarHtml(info) {
+  return `
+    <div class="maturity-row">
+      <div class="maturity-bar"><div class="maturity-fill" style="width:${(info.ratio * 100).toFixed(0)}%;background:${info.color}"></div></div>
+      <span class="maturity-label" style="color:${info.color}">${esc(info.label)}</span>
+    </div>`;
+}
+
+function logListHtml(log) {
+  if (!log || log.length === 0) return `<div class="log-empty">Nenhum registro de evolução ainda.</div>`;
+  const sorted = [...log].sort((a, b) => new Date(a.date) - new Date(b.date));
+  return `<div class="log-list">${sorted
+    .map((entry) => `<div class="log-entry"><span class="log-date">${esc(formatDateBR(entry.date))}</span><span class="log-note">${esc(entry.note)}</span></div>`)
+    .join("")}</div>`;
+}
+
+function formatDateBR(iso) {
+  const d = new Date(iso);
+  if (isNaN(d.getTime())) return iso;
+  return d.toLocaleDateString("pt-BR");
+}
+
+/* -------------------------------- LOTES TAB --------------------------------- */
+/* MÓDULOS 1, 9, 10, 11, 16 — lista de lotes, maceração automática, evolução, custo */
+
+const BATCH_STATUS = [
+  { key: "macerando", label: "Macerando" },
+  { key: "pronto", label: "Pronto" },
+  { key: "entregue", label: "Entregue" },
+];
 
 function lotesShellHtml() {
-  if (state.batches.length === 0) {
-    return `<div class="empty"><div class="empty-title">Nenhum lote produzido ainda</div><div class="empty-sub">Vá para a aba Fórmulas e clique em "+ Produzir Lote".</div></div>`;
-  }
-  return `<div class="forms-grid">${state.batches.map((b) => `
-    <div class="fcard">
-      <div class="fcard-eyebrow">
-        <span class="fcard-num">${esc(b.batch_number)}</span>
-        <span class="fcard-type">${esc(b.type)}</span>
-      </div>
-      <div class="fcard-name">${esc(b.formula_name)}</div>
-      <div style="font-size:13px;color:var(--ash);margin-top:4px;">Volume: ${b.size_ml} ml</div>
-      <div style="font-size:12px;color:var(--gold);margin-top:4px;font-family:'JetBrains Mono',monospace;">
-        Custo Total: R$ ${Number(b.total_cost || 0).toFixed(2)}
-      </div>
+  return `
+    <div class="form-header">
+      <span class="form-count">${state.batches.length} lote${state.batches.length === 1 ? "" : "s"} registrado${state.batches.length === 1 ? "" : "s"}</span>
     </div>
-  `).join("")}</div>`;
+    <div id="batchesGrid"></div>
+  `;
 }
 
-function financeiroShellHtml() {
-  const totalStockValue = state.items.reduce((acc, item) => {
-    return acc + (CostsService.getUnitCost(item) * Number(item.quantity || 0));
-  }, 0);
+function wireLotesShell() {
+  document.getElementById("tabContent").addEventListener("click", delegatedLotesClicks);
+  document.getElementById("tabContent").addEventListener("submit", (e) => e.preventDefault());
+  renderBatchesGrid();
+}
 
+function delegatedLotesClicks(e) {
+  const btn = e.target.closest("[data-action]");
+  if (!btn) return;
+  const action = btn.dataset.action;
+  if (action === "delete-batch") handleDeleteBatch(btn.dataset.id);
+  else if (action === "add-batch-log") handleAddLog("batch", btn.dataset.id);
+  else if (action === "set-batch-status") handleSetBatchStatus(btn.dataset.id, btn.dataset.status);
+}
+
+function renderBatchesGrid() {
+  const el = document.getElementById("batchesGrid");
+  if (!el) return;
+  const sorted = [...state.batches].sort((a, b) => b.createdAt - a.createdAt);
+  if (sorted.length === 0) {
+    el.innerHTML = `
+      <div class="empty">
+        <div class="empty-title">Nenhum lote produzido ainda</div>
+        <div class="empty-sub">Vai na aba Fórmulas e clica em "Produzir lote" pra dar baixa automática no estoque e começar a maceração.</div>
+      </div>`;
+    return;
+  }
+  el.innerHTML = `<div class="forms-grid">${sorted.map((b) => batchCardHtml(b)).join("")}</div>`;
+}
+
+function batchCardHtml(b) {
+  const formula = state.formulas.find((f) => f.id === b.formulaId);
+  const info = maturityInfo(b.createdAt, b.maturationDays);
+  const ingredientsHtml = b.ingredients
+    .map((n) => `<div class="mat-row"><span class="mat-name">${esc(n.name)}</span><span class="mat-pct">${fmt(n.needed)}${esc(n.unit)}</span></div>`)
+    .join("");
   return `
-    <div class="empty" style="text-align:left;">
-      <div class="empty-title">Dashboard Financeiro</div>
-      <div style="display:grid;grid-template-columns:repeat(auto-fill, minmax(220px,1fr));gap:14px;margin-top:20px;">
-        <div style="background:var(--onyx);border:1px solid var(--hair);padding:16px;border-radius:10px;">
-          <div style="font-size:11px;color:var(--ash);text-transform:uppercase;">Valor Total do Estoque</div>
-          <div style="font-size:22px;font-weight:700;color:var(--gold);margin-top:6px;font-family:'JetBrains Mono',monospace;">R$ ${totalStockValue.toFixed(2)}</div>
-        </div>
-        <div style="background:var(--onyx);border:1px solid var(--hair);padding:16px;border-radius:10px;">
-          <div style="font-size:11px;color:var(--ash);text-transform:uppercase;">Total de Insumos</div>
-          <div style="font-size:22px;font-weight:700;color:var(--white);margin-top:6px;">${state.items.length} itens</div>
+    <div class="fcard">
+      <div class="fcard-eyebrow">
+        <span class="fcard-num">${esc(b.code)}</span>
+        <span class="fcard-type">${b.batchType === "producao" ? "Produção" : "Teste"} · ${fmt(b.quantityMl)}ml</span>
+      </div>
+      <div class="fcard-name">${esc(formula ? formula.name : "(fórmula removida)")}</div>
+      <div class="status-row">
+        ${BATCH_STATUS.map((s) => `<button type="button" class="status-chip ${b.status === s.key ? "active" : ""}" data-action="set-batch-status" data-id="${b.id}" data-status="${s.key}">${esc(s.label)}</button>`).join("")}
+      </div>
+      ${maturityBarHtml(info)}
+      <div class="mat-list">${ingredientsHtml}</div>
+      <div class="cost-box">
+        <div class="calc-result-row"><span>custo total</span><span>${fmtBRL(b.totalCost)}</span></div>
+        <div class="calc-result-row"><span>custo por ml</span><span>${fmtBRL(b.costPerMl)}</span></div>
+      </div>
+      ${b.notes ? `<div class="card-notes">${esc(b.notes)}</div>` : ""}
+      <div class="log-section">
+        <div class="label" style="margin-top:0;">Evolução do lote</div>
+        ${logListHtml(b.log)}
+        <form class="log-form" data-log-form="batch-${b.id}">
+          <input type="text" class="input" placeholder="Ex: mais cítrico do que esperado" id="logNote-batch-${b.id}" />
+          <button type="submit" class="btn-ghost small" data-action="add-batch-log" data-id="${b.id}">+ registrar</button>
+        </form>
+      </div>
+      <div class="fcard-actions">
+        <div class="fcard-actions-left">
+          <button class="btn-text danger" data-action="delete-batch" data-id="${b.id}">remover</button>
         </div>
       </div>
     </div>`;
 }
 
-/* ------------------------------ EVENTOS & TOPBAR --------------------------- */
+async function handleSetBatchStatus(id, status) {
+  const b = state.batches.find((x) => x.id === id);
+  if (!b) return;
+  await updateBatch(id, { ...b, status });
+  renderBatchesGrid();
+}
+
+async function handleDeleteBatch(id) {
+  if (!confirm("Remover esse lote? Isso não devolve o material ao estoque.")) return;
+  await deleteBatch(id);
+  renderBatchesGrid();
+}
+
+/* -------------------------------- ACORDES TAB ------------------------------- */
+
+function acordesShellHtml() {
+  return `
+    <div class="form-header">
+      <span class="form-count">${state.accords.length} acorde${state.accords.length === 1 ? "" : "s"} em teste</span>
+      <button class="btn-primary" data-action="new-accord">+ Novo acorde</button>
+    </div>
+    <div id="accordsGrid"></div>
+  `;
+}
+
+function wireAcordesShell() {
+  document.getElementById("tabContent").addEventListener("click", delegatedAcordesClicks);
+  document.getElementById("tabContent").addEventListener("submit", (e) => e.preventDefault());
+  renderAccordsGrid();
+}
+
+function delegatedAcordesClicks(e) {
+  const btn = e.target.closest("[data-action]");
+  if (!btn) return;
+  const action = btn.dataset.action;
+  if (action === "new-accord") openAccordModal(null);
+  else if (action === "edit-accord") openAccordModal(btn.dataset.id);
+  else if (action === "delete-accord") handleDeleteAccord(btn.dataset.id);
+  else if (action === "add-accord-log") handleAddLog("accord", btn.dataset.id);
+}
+
+function renderAccordsGrid() {
+  const el = document.getElementById("accordsGrid");
+  if (!el) return;
+  const sorted = [...state.accords].sort((a, b) => a.createdAt - b.createdAt);
+  if (sorted.length === 0) {
+    el.innerHTML = `
+      <div class="empty">
+        <div class="empty-title">Nenhum acorde em teste</div>
+        <div class="empty-sub">Cadastre um acorde pra acompanhar a maceração — a cor muda de vermelho pra maduro conforme os dias passam.</div>
+        <button class="btn-primary" data-action="new-accord">+ Novo acorde</button>
+      </div>`;
+    return;
+  }
+  el.innerHTML = `<div class="forms-grid">${sorted.map((a) => accordCardHtml(a)).join("")}</div>`;
+}
+
+function accordCardHtml(a) {
+  const info = maturityInfo(a.createdAt, a.maturationDays);
+  const totalPct = a.materials.reduce((s, m) => s + m.percentage, 0);
+  const matListHtml = a.materials.map((m) => `<div class="mat-row"><span class="mat-name">${esc(m.name)}</span><span class="mat-pct">${fmt(m.percentage)}%</span></div>`).join("");
+  return `
+    <div class="fcard">
+      <div class="fcard-eyebrow">
+        <span class="fcard-num">criado em ${esc(formatDateBR(new Date(a.createdAt).toISOString()))}</span>
+        <span class="fcard-type">${a.maturationDays}d de maceração</span>
+      </div>
+      <div class="fcard-name">${esc(a.name)}</div>
+      ${maturityBarHtml(info)}
+      <div class="fcard-total"><span>${a.materials.length} material${a.materials.length === 1 ? "" : "es"}</span><span>total ${fmt(totalPct)}%</span></div>
+      <div class="mat-list">${matListHtml}</div>
+      ${a.notes ? `<div class="card-notes">${esc(a.notes)}</div>` : ""}
+      <div class="log-section">
+        <div class="label" style="margin-top:0;">Evolução</div>
+        ${logListHtml(a.log)}
+        <form class="log-form" data-log-form="accord-${a.id}">
+          <input type="text" class="input" placeholder="Como tá hoje?" id="logNote-accord-${a.id}" />
+          <button type="submit" class="btn-ghost small" data-action="add-accord-log" data-id="${a.id}">+ registrar</button>
+        </form>
+      </div>
+      <div class="fcard-actions">
+        <div class="fcard-actions-left">
+          <button class="btn-text" data-action="edit-accord" data-id="${a.id}">editar</button>
+          <button class="btn-text danger" data-action="delete-accord" data-id="${a.id}">remover</button>
+        </div>
+      </div>
+    </div>`;
+}
+
+async function handleDeleteAccord(id) {
+  if (!confirm("Remover esse acorde?")) return;
+  await deleteAccord(id);
+  renderAccordsGrid();
+}
+
+async function handleAddLog(type, id) {
+  const input = document.getElementById(`logNote-${type}-${id}`);
+  const note = input ? input.value.trim() : "";
+  if (!note) return;
+  const entry = { date: new Date().toISOString(), note };
+  if (type === "accord") {
+    const item = state.accords.find((a) => a.id === id);
+    if (!item) return;
+    const record = { ...item, log: [...item.log, entry] };
+    await updateAccord(id, record);
+    renderAccordsGrid();
+  } else if (type === "batch") {
+    const item = state.batches.find((b) => b.id === id);
+    if (!item) return;
+    const record = { ...item, log: [...item.log, entry] };
+    await updateBatch(id, record);
+    renderBatchesGrid();
+  } else {
+    const item = state.perfumes.find((p) => p.id === id);
+    if (!item) return;
+    const record = { ...item, log: [...item.log, entry] };
+    await updatePerfume(id, record);
+    renderPerfumesGrid();
+  }
+}
+
+let accordRows = [];
+
+function openAccordModal(editId) {
+  const editing = editId ? state.accords.find((a) => a.id === editId) : null;
+  accordRows = editing
+    ? editing.materials.map((m) => ({ rowId: uid(), inventoryId: m.inventoryId || "", name: m.name, percentage: String(m.percentage) }))
+    : [{ rowId: uid(), inventoryId: "", name: "", percentage: "" }];
+
+  const root = document.getElementById("modalRoot");
+  root.innerHTML = `
+    <div class="overlay" id="overlay">
+      <form class="modal modal-wide" id="accordForm">
+        <div class="modal-title">${editing ? "Editar acorde" : "Novo acorde"}</div>
+
+        <label class="label">Nome do acorde</label>
+        <input class="input" id="ac-name" value="${editing ? esc(editing.name) : ""}" placeholder="Ex: Acorde âmbar modificado" />
+
+        <label class="label">Prazo estimado de maceração (dias)</label>
+        <input class="input" id="ac-maturation" type="number" step="1" value="${editing ? editing.maturationDays : "18"}" />
+        <div style="font-size:11px;color:var(--ash-dim);margin-top:4px;">Referência: leve/cítrico ~7-10d · equilibrado ~15-20d · pesado/resinoso ~25-35d</div>
+
+        <label class="label" style="margin-top:16px;">Materiais do acorde (%)</label>
+        <div id="accordRowsContainer"></div>
+        <button type="button" class="add-row-btn" id="addAccordRowBtn">+ adicionar material</button>
+
+        <label class="label">Notas</label>
+        <textarea class="input" id="ac-notes" style="min-height:60px;resize:vertical;">${editing ? esc(editing.notes) : ""}</textarea>
+
+        <div class="form-error" id="accordFormError" style="display:none;"></div>
+
+        <div class="modal-actions">
+          <button type="button" class="btn-ghost" data-action="close-modal">Cancelar</button>
+          <button type="submit" class="btn-primary">${editing ? "Salvar alterações" : "Adicionar acorde"}</button>
+        </div>
+      </form>
+    </div>`;
+
+  document.getElementById("overlay").addEventListener("click", (e) => { if (e.target.id === "overlay") closeModal(); });
+  document.getElementById("accordForm").addEventListener("click", (e) => e.stopPropagation());
+  root.querySelector('[data-action="close-modal"]').addEventListener("click", closeModal);
+
+  renderAccordRows();
+  document.getElementById("addAccordRowBtn").addEventListener("click", () => {
+    accordRows.push({ rowId: uid(), inventoryId: "", name: "", percentage: "" });
+    renderAccordRows();
+  });
+
+  document.getElementById("accordForm").addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const name = document.getElementById("ac-name").value.trim();
+    const errEl = document.getElementById("accordFormError");
+    const materials = accordRows
+      .map((r) => {
+        const invSelect = document.getElementById("acrow-inv-" + r.rowId);
+        const nameInput = document.getElementById("acrow-name-" + r.rowId);
+        const pctInput = document.getElementById("acrow-pct-" + r.rowId);
+        const inventoryId = invSelect ? invSelect.value : "";
+        let rname;
+        if (inventoryId) {
+          const inv = state.items.find((it) => it.id === inventoryId);
+          rname = inv ? inv.name : "";
+        } else {
+          rname = nameInput ? nameInput.value.trim() : "";
+        }
+        return { id: uid(), inventoryId: inventoryId || null, name: rname, percentage: parseFloat(pctInput ? pctInput.value : 0) || 0 };
+      })
+      .filter((m) => m.name);
+
+    if (!name) { errEl.textContent = "Dá um nome pro acorde antes de salvar."; errEl.style.display = "block"; return; }
+    if (materials.length === 0) { errEl.textContent = "Adiciona pelo menos um material com nome preenchido."; errEl.style.display = "block"; return; }
+    errEl.style.display = "none";
+
+    const record = {
+      name,
+      materials,
+      maturationDays: parseFloat(document.getElementById("ac-maturation").value) || 18,
+      notes: document.getElementById("ac-notes").value.trim(),
+      log: editing ? editing.log : [],
+    };
+
+    const ok = editing ? await updateAccord(editing.id, record) : await addAccord(record);
+    if (ok) { closeModal(); renderAccordsGrid(); }
+  });
+}
+
+function renderAccordRows() {
+  const container = document.getElementById("accordRowsContainer");
+  container.innerHTML = accordRows
+    .map(
+      (row, i) => `
+      <div class="mat-editor" data-row="${row.rowId}">
+        <div class="mat-editor-top">
+          <span class="mat-editor-idx">material ${String(i + 1).padStart(2, "0")}</span>
+          ${accordRows.length > 1 ? `<button type="button" class="remove-row" data-remove="${row.rowId}">remover</button>` : ""}
+        </div>
+        <select class="input" id="acrow-inv-${row.rowId}">${inventoryOptionsHtml(row.inventoryId)}</select>
+        <div class="manual-fields-${row.rowId}" style="${row.inventoryId ? "display:none;" : ""}">
+          <input class="input" id="acrow-name-${row.rowId}" placeholder="Nome do material" value="${esc(row.name)}" />
+        </div>
+        <label class="label" style="margin-top:0;">% no acorde</label>
+        <input class="input" id="acrow-pct-${row.rowId}" type="number" step="0.01" value="${esc(row.percentage)}" />
+      </div>`
+    )
+    .join("");
+
+  accordRows.forEach((row) => {
+    const invSelect = document.getElementById("acrow-inv-" + row.rowId);
+    invSelect.addEventListener("change", () => {
+      const wrap = container.querySelector(".manual-fields-" + row.rowId);
+      if (wrap) wrap.style.display = invSelect.value ? "none" : "";
+    });
+    const removeBtn = container.querySelector(`[data-remove="${row.rowId}"]`);
+    if (removeBtn) removeBtn.addEventListener("click", () => { accordRows = accordRows.filter((r) => r.rowId !== row.rowId); renderAccordRows(); });
+  });
+}
+
+/* -------------------------------- PERFUMES TAB ------------------------------ */
+
+function perfumesShellHtml() {
+  return `
+    <div class="form-header">
+      <span class="form-count">${state.perfumes.length} cria${state.perfumes.length === 1 ? "ção" : "ções"} em acompanhamento</span>
+      <button class="btn-primary" data-action="new-perfume">+ Nova criação</button>
+    </div>
+    <div id="perfumesGrid"></div>
+  `;
+}
+
+function wirePerfumesShell() {
+  document.getElementById("tabContent").addEventListener("click", delegatedPerfumesClicks);
+  document.getElementById("tabContent").addEventListener("submit", (e) => e.preventDefault());
+  renderPerfumesGrid();
+}
+
+function delegatedPerfumesClicks(e) {
+  const btn = e.target.closest("[data-action]");
+  if (!btn) return;
+  const action = btn.dataset.action;
+  if (action === "new-perfume") openPerfumeModal(null);
+  else if (action === "edit-perfume") openPerfumeModal(btn.dataset.id);
+  else if (action === "delete-perfume") handleDeletePerfume(btn.dataset.id);
+  else if (action === "add-perfume-log") handleAddLog("perfume", btn.dataset.id);
+}
+
+function renderPerfumesGrid() {
+  const el = document.getElementById("perfumesGrid");
+  if (!el) return;
+  const sorted = [...state.perfumes].sort((a, b) => a.createdAt - b.createdAt);
+  if (sorted.length === 0) {
+    el.innerHTML = `
+      <div class="empty">
+        <div class="empty-title">Nenhuma criação em acompanhamento</div>
+        <div class="empty-sub">Registra o briefing de um perfume — nome, proposta e prazo de maceração — e acompanha a maturação até ficar pronto pra avaliar de verdade.</div>
+        <button class="btn-primary" data-action="new-perfume">+ Nova criação</button>
+      </div>`;
+    return;
+  }
+  el.innerHTML = `<div class="forms-grid">${sorted.map((p) => perfumeCardHtml(p)).join("")}</div>`;
+}
+
+// MÓDULO 18/19: caixa de custo do perfume
+function perfumeCostBoxHtml(p) {
+  const b = perfumeCostBreakdown(p);
+  if (!b.hasFormula && b.pkgLines.length === 0) return "";
+  return `
+    <div class="cost-box">
+      <div class="cost-box-title">Custo final (${fmt(b.fillMl)}ml)</div>
+      <div class="calc-result-row"><span>fórmula</span><span>${fmtBRL(b.formulaCost)}</span></div>
+      ${b.pkgLines.map((l) => `<div class="calc-result-row"><span style="color:var(--ash)">${esc(l.name)} ×${fmt(l.qty)}</span><span>${fmtBRL(l.cost)}</span></div>`).join("")}
+      <div class="calc-result-row" style="border-top:1px solid var(--hair-soft);padding-top:6px;"><span>custo total</span><span>${fmtBRL(b.total)}</span></div>
+      <div class="calc-result-row"><span>markup ${fmt(b.markup)}x</span><span style="color:var(--gold)">preço sugerido: ${fmtBRL(b.suggestedPrice)}</span></div>
+    </div>`;
+}
+
+function perfumeCardHtml(p) {
+  const info = maturityInfo(p.createdAt, p.maturationDays);
+  const linkedFormula = p.formulaId ? state.formulas.find((f) => f.id === p.formulaId) : null;
+  return `
+    <div class="fcard">
+      <div class="fcard-eyebrow">
+        <span class="fcard-num">criado em ${esc(formatDateBR(new Date(p.createdAt).toISOString()))}</span>
+        <span class="fcard-type">${p.maturationDays}d de maceração</span>
+      </div>
+      <div class="fcard-name">${esc(p.name)}</div>
+      ${p.briefing ? `<div class="fcard-concept">${esc(p.briefing)}</div>` : ""}
+      ${linkedFormula ? `<div style="font-size:11px;color:var(--gold);">fórmula vinculada: ${esc(linkedFormula.name)}</div>` : ""}
+      ${maturityBarHtml(info)}
+      ${perfumeCostBoxHtml(p)}
+      ${p.notes ? `<div class="card-notes">${esc(p.notes)}</div>` : ""}
+      <div class="log-section">
+        <div class="label" style="margin-top:0;">Evolução</div>
+        ${logListHtml(p.log)}
+        <form class="log-form" data-log-form="perfume-${p.id}">
+          <input type="text" class="input" placeholder="Como tá hoje?" id="logNote-perfume-${p.id}" />
+          <button type="submit" class="btn-ghost small" data-action="add-perfume-log" data-id="${p.id}">+ registrar</button>
+        </form>
+      </div>
+      <div class="fcard-actions">
+        <div class="fcard-actions-left">
+          <button class="btn-text" data-action="edit-perfume" data-id="${p.id}">editar</button>
+          <button class="btn-text danger" data-action="delete-perfume" data-id="${p.id}">remover</button>
+        </div>
+      </div>
+    </div>`;
+}
+
+async function handleDeletePerfume(id) {
+  if (!confirm("Remover essa criação?")) return;
+  await deletePerfume(id);
+  renderPerfumesGrid();
+}
+
+function packagingOptionsHtml(selectedId) {
+  let html = `<option value="">— escolher insumo —</option>`;
+  PACKAGING_CATEGORIES.forEach((cat) => {
+    const opts = state.packaging.filter((p) => p.category === cat.key);
+    if (opts.length === 0) return;
+    html += `<optgroup label="${esc(cat.label)}">`;
+    opts.forEach((p) => {
+      html += `<option value="${p.id}" ${selectedId === p.id ? "selected" : ""}>${esc(p.name)} — ${fmtBRL(packagingUnitCost(p))}/un</option>`;
+    });
+    html += `</optgroup>`;
+  });
+  return html;
+}
+
+let perfumePkgRows = [];
+
+function renderPerfumePkgRows() {
+  const container = document.getElementById("pkgRowsContainer");
+  if (!container) return;
+  if (perfumePkgRows.length === 0) {
+    container.innerHTML = `<div class="log-empty">Nenhum insumo de embalagem adicionado ainda.</div>`;
+  } else {
+    container.innerHTML = perfumePkgRows
+      .map(
+        (row, i) => `
+      <div class="mat-editor" data-row="${row.rowId}">
+        <div class="mat-editor-top">
+          <span class="mat-editor-idx">insumo ${String(i + 1).padStart(2, "0")}</span>
+          <button type="button" class="remove-row" data-remove-pkg="${row.rowId}">remover</button>
+        </div>
+        <select class="input" id="pkgrow-item-${row.rowId}">${packagingOptionsHtml(row.packagingItemId)}</select>
+        <div>
+          <label class="label" style="margin-top:0;">Quantidade</label>
+          <input class="input" id="pkgrow-qty-${row.rowId}" type="number" step="1" value="${esc(row.qty)}" />
+        </div>
+      </div>`
+      )
+      .join("");
+  }
+  perfumePkgRows.forEach((row) => {
+    const removeBtn = container.querySelector(`[data-remove-pkg="${row.rowId}"]`);
+    if (removeBtn) removeBtn.addEventListener("click", () => { perfumePkgRows = perfumePkgRows.filter((r) => r.rowId !== row.rowId); renderPerfumePkgRows(); });
+  });
+}
+
+function openPerfumeModal(editId) {
+  const editing = editId ? state.perfumes.find((p) => p.id === editId) : null;
+  perfumePkgRows = editing && editing.packaging.length
+    ? editing.packaging.map((l) => ({ rowId: uid(), packagingItemId: l.packagingItemId, qty: l.qty }))
+    : [];
+  const root = document.getElementById("modalRoot");
+  root.innerHTML = `
+    <div class="overlay" id="overlay">
+      <form class="modal modal-wide" id="perfumeForm">
+        <div class="modal-title">${editing ? "Editar criação" : "Nova criação"}</div>
+
+        <label class="label">Nome do perfume</label>
+        <input class="input" id="pf-name" value="${editing ? esc(editing.name) : ""}" placeholder="Ex: Brasa de Mel" />
+
+        <label class="label">Briefing / proposta</label>
+        <textarea class="input" id="pf-briefing" style="min-height:70px;resize:vertical;" placeholder="O que esse perfume propõe, pra quem, a ideia por trás">${editing ? esc(editing.briefing) : ""}</textarea>
+
+        <label class="label">Fórmula vinculada (opcional)</label>
+        <select class="input" id="pf-formula">
+          <option value="">— nenhuma —</option>
+          ${state.formulas.map((f) => `<option value="${f.id}" ${editing && editing.formulaId === f.id ? "selected" : ""}>${esc(f.name)}</option>`).join("")}
+        </select>
+
+        <label class="label">Prazo estimado de maceração (dias)</label>
+        <input class="input" id="pf-maturation" type="number" step="1" value="${editing ? editing.maturationDays : "18"}" />
+        <div style="font-size:11px;color:var(--ash-dim);margin-top:4px;">Referência: leve/cítrico ~7-10d · equilibrado ~15-20d · pesado/resinoso ~25-35d</div>
+
+        <div class="cost-fieldset">
+          <div class="cost-fieldset-title">Custo final e precificação (MÓDULOS 18, 19)</div>
+          <div class="row2">
+            <div>
+              <label class="label" style="margin-top:0;">Volume do frasco (ml)</label>
+              <input class="input" id="pf-fillMl" type="number" step="1" value="${editing ? editing.fillMl : "50"}" />
+            </div>
+            <div>
+              <label class="label" style="margin-top:0;">Markup desejado (x)</label>
+              <input class="input" id="pf-markup" type="number" step="0.1" value="${editing ? editing.markup : "4"}" />
+            </div>
+          </div>
+          <label class="label">Embalagem</label>
+          <div id="pkgRowsContainer"></div>
+          <button type="button" class="add-row-btn" id="addPkgRowBtn">+ adicionar insumo</button>
+        </div>
+
+        <label class="label">Notas</label>
+        <textarea class="input" id="pf-notes" style="min-height:60px;resize:vertical;">${editing ? esc(editing.notes) : ""}</textarea>
+
+        <div class="form-error" id="perfumeFormError" style="display:none;"></div>
+
+        <div class="modal-actions">
+          <button type="button" class="btn-ghost" data-action="close-modal">Cancelar</button>
+          <button type="submit" class="btn-primary">${editing ? "Salvar alterações" : "Adicionar criação"}</button>
+        </div>
+      </form>
+    </div>`;
+
+  document.getElementById("overlay").addEventListener("click", (e) => { if (e.target.id === "overlay") closeModal(); });
+  document.getElementById("perfumeForm").addEventListener("click", (e) => e.stopPropagation());
+  root.querySelector('[data-action="close-modal"]').addEventListener("click", closeModal);
+
+  renderPerfumePkgRows();
+  document.getElementById("addPkgRowBtn").addEventListener("click", () => {
+    perfumePkgRows.push({ rowId: uid(), packagingItemId: "", qty: 1 });
+    renderPerfumePkgRows();
+  });
+
+  document.getElementById("perfumeForm").addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const name = document.getElementById("pf-name").value.trim();
+    const errEl = document.getElementById("perfumeFormError");
+    if (!name) { errEl.textContent = "Dá um nome pro perfume antes de salvar."; errEl.style.display = "block"; return; }
+    errEl.style.display = "none";
+
+    const packaging = perfumePkgRows
+      .map((row) => {
+        const sel = document.getElementById("pkgrow-item-" + row.rowId);
+        const qtyInput = document.getElementById("pkgrow-qty-" + row.rowId);
+        return { packagingItemId: sel ? sel.value : "", qty: parseFloat(qtyInput ? qtyInput.value : 0) || 0 };
+      })
+      .filter((l) => l.packagingItemId);
+
+    const record = {
+      name,
+      briefing: document.getElementById("pf-briefing").value.trim(),
+      formulaId: document.getElementById("pf-formula").value || null,
+      maturationDays: parseFloat(document.getElementById("pf-maturation").value) || 18,
+      fillMl: parseFloat(document.getElementById("pf-fillMl").value) || 50,
+      markup: parseFloat(document.getElementById("pf-markup").value) || 4,
+      packaging,
+      notes: document.getElementById("pf-notes").value.trim(),
+      log: editing ? editing.log : [],
+    };
+
+    const ok = editing ? await updatePerfume(editing.id, record) : await addPerfume(record);
+    if (ok) { closeModal(); renderPerfumesGrid(); }
+  });
+}
+
+/* ------------------------------ EMBALAGENS TAB ------------------------------ */
+/* MÓDULO 17 — insumos de embalagem */
+
+function embalagensShellHtml() {
+  return `
+    <div class="form-header">
+      <span class="form-count">${state.packaging.length} insumo${state.packaging.length === 1 ? "" : "s"} cadastrado${state.packaging.length === 1 ? "" : "s"}</span>
+      <button class="btn-primary" data-action="new-packaging">+ Novo insumo</button>
+    </div>
+    <div id="packagingGrid"></div>
+  `;
+}
+
+function wireEmbalagensShell() {
+  document.getElementById("tabContent").addEventListener("click", delegatedEmbalagensClicks);
+  renderPackagingGrid();
+}
+
+function delegatedEmbalagensClicks(e) {
+  const btn = e.target.closest("[data-action]");
+  if (!btn) return;
+  const action = btn.dataset.action;
+  if (action === "new-packaging") openPackagingModal(null);
+  else if (action === "edit-packaging") openPackagingModal(btn.dataset.id);
+  else if (action === "delete-packaging") handleDeletePackaging(btn.dataset.id);
+}
+
+function renderPackagingGrid() {
+  const el = document.getElementById("packagingGrid");
+  if (!el) return;
+  if (state.packaging.length === 0) {
+    el.innerHTML = `
+      <div class="empty">
+        <div class="empty-title">Nenhum insumo de embalagem</div>
+        <div class="empty-sub">Cadastre frascos, válvulas, tampas, caixas e etiquetas pra calcular o custo final dos teus perfumes.</div>
+        <button class="btn-primary" data-action="new-packaging">+ Novo insumo</button>
+      </div>`;
+    return;
+  }
+  const grouped = {};
+  PACKAGING_CATEGORIES.forEach((c) => (grouped[c.key] = []));
+  state.packaging.forEach((p) => (grouped[p.category] = grouped[p.category] || []).push(p));
+  let html = "";
+  PACKAGING_CATEGORIES.forEach((c) => {
+    const list = grouped[c.key] || [];
+    if (list.length === 0) return;
+    html += `<section class="fam-section"><div class="fam-title" style="padding:10px 2px;border-bottom:1px solid var(--hair);">${esc(c.label)}</div><div class="grid">${list.map(packagingCardHtml).join("")}</div></section>`;
+  });
+  el.innerHTML = html;
+}
+
+function packagingCardHtml(p) {
+  return `
+    <div class="card">
+      <div class="card-bar" style="background:var(--gold)"></div>
+      <div class="card-body">
+        <div class="card-top"><div class="card-name">${esc(p.name)}</div></div>
+        <div class="card-qty">${fmtBRL(packagingUnitCost(p))} <span style="color:var(--ash);font-size:12px;">/ un</span></div>
+        <div class="card-meta">
+          <span>${fmtBRL(p.price)} por ${fmt(p.quantity)} un</span>
+          ${p.supplier ? `<span>${esc(p.supplier)}</span>` : ""}
+        </div>
+        <div class="card-actions">
+          <button class="btn-text" data-action="edit-packaging" data-id="${p.id}">editar</button>
+          <button class="btn-text danger" data-action="delete-packaging" data-id="${p.id}">remover</button>
+        </div>
+      </div>
+    </div>`;
+}
+
+async function handleDeletePackaging(id) {
+  if (!confirm("Remover esse insumo de embalagem?")) return;
+  await deletePackaging(id);
+  renderPackagingGrid();
+}
+
+function openPackagingModal(editId) {
+  const editing = editId ? state.packaging.find((p) => p.id === editId) : null;
+  const root = document.getElementById("modalRoot");
+  root.innerHTML = `
+    <div class="overlay" id="overlay">
+      <form class="modal" id="packagingForm">
+        <div class="modal-title">${editing ? "Editar insumo" : "Novo insumo de embalagem"}</div>
+        <label class="label" style="margin-top:0;">Nome</label>
+        <input class="input" id="pk-name" value="${editing ? esc(editing.name) : ""}" placeholder="Ex: Frasco 50ml âmbar" />
+        <label class="label">Categoria</label>
+        <select class="input" id="pk-category">
+          ${PACKAGING_CATEGORIES.map((c) => `<option value="${c.key}" ${editing && editing.category === c.key ? "selected" : ""}>${esc(c.label)}</option>`).join("")}
+        </select>
+        <div class="row2">
+          <div>
+            <label class="label">Preço pago (R$)</label>
+            <input class="input" id="pk-price" type="number" step="0.01" value="${editing ? editing.price : ""}" />
+          </div>
+          <div>
+            <label class="label">Quantidade comprada</label>
+            <input class="input" id="pk-quantity" type="number" step="1" value="${editing ? editing.quantity : "1"}" />
+          </div>
+        </div>
+        <label class="label">Fornecedor</label>
+        <input class="input" id="pk-supplier" value="${editing ? esc(editing.supplier) : ""}" />
+        <div class="form-error" id="packagingFormError" style="display:none;"></div>
+        <div class="modal-actions">
+          <button type="button" class="btn-ghost" data-action="close-modal">Cancelar</button>
+          <button type="submit" class="btn-primary">${editing ? "Salvar alterações" : "Adicionar insumo"}</button>
+        </div>
+      </form>
+    </div>`;
+  document.getElementById("overlay").addEventListener("click", (e) => { if (e.target.id === "overlay") closeModal(); });
+  document.getElementById("packagingForm").addEventListener("click", (e) => e.stopPropagation());
+  root.querySelector('[data-action="close-modal"]').addEventListener("click", closeModal);
+
+  document.getElementById("packagingForm").addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const name = document.getElementById("pk-name").value.trim();
+    const errEl = document.getElementById("packagingFormError");
+    if (!name) { errEl.textContent = "Dá um nome pro insumo antes de salvar."; errEl.style.display = "block"; return; }
+    errEl.style.display = "none";
+    const record = {
+      name,
+      category: document.getElementById("pk-category").value,
+      price: parseFloat(document.getElementById("pk-price").value) || 0,
+      quantity: parseFloat(document.getElementById("pk-quantity").value) || 1,
+      supplier: document.getElementById("pk-supplier").value.trim(),
+    };
+    const ok = editing ? await updatePackaging(editing.id, record) : await addPackaging(record);
+    if (ok) { closeModal(); renderPackagingGrid(); }
+  });
+}
+
+/* -------------------------------- TOPBAR ----------------------------------- */
 
 function wireTopbar() {
   document.querySelectorAll('[data-action="tab"]').forEach((btn) => {
     btn.addEventListener("click", () => {
       state.tab = btn.dataset.tab;
-      document.querySelectorAll(".tab-btn").forEach((b) => b.classList.toggle("active", b.dataset.tab === state.tab));
+      renderTabbarActive();
       renderTabContent();
     });
   });
+  document.querySelector('[data-action="export"]').addEventListener("click", handleExport);
+  document.querySelector('[data-action="import"]').addEventListener("click", () => document.getElementById("importFile").click());
+  document.getElementById("importFile").addEventListener("change", handleFileChosen);
 }
 
-function wireFormulasShell() {
-  const container = document.getElementById("tabContent");
-  if (!container) return;
-  
-  container.onclick = async (e) => {
-    const btn = e.target.closest('[data-action="produce-batch"]');
-    if (!btn) return;
+function renderTabbarActive() {
+  document.querySelectorAll(".tab-btn").forEach((b) => b.classList.toggle("active", b.dataset.tab === state.tab));
+}
 
-    const formulaId = btn.dataset.id;
-    const formula = state.formulas.find((f) => f.id === formulaId);
-    if (!formula) return;
+function handleExport() {
+  const payload = {
+    app: "obsidian-laboratorio",
+    exportedAt: new Date().toISOString(),
+    items: state.items,
+    formulas: state.formulas,
+    accords: state.accords,
+    perfumes: state.perfumes,
+    batches: state.batches,
+    packaging: state.packaging,
+  };
+  const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = `obsidian-backup-${new Date().toISOString().slice(0, 10)}.json`;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+  showToast("Backup exportado.", true);
+}
 
-    const volumeStr = prompt(`[Produzir Lote da Fórmula: ${formula.name}]\nInforme a quantidade desejada em ml:`, "100");
-    if (!volumeStr) return;
-
-    const volumeMl = parseFloat(volumeStr);
-    if (isNaN(volumeMl) || volumeMl <= 0) {
-      alert("Quantidade inválida.");
-      return;
-    }
-
+function handleFileChosen(e) {
+  const file = e.target.files && e.target.files[0];
+  e.target.value = "";
+  if (!file) return;
+  const reader = new FileReader();
+  reader.onload = () => {
     try {
-      const res = await produceBatch({
-        formula,
-        batchSizeMl: volumeMl,
-        type: "producao",
-        maturationDays: 30,
-        notes: "Lote gerado via interface",
-        materialsList: state.items
-      });
-
-      if (!res.success) {
-        let msg = "Estoque insuficiente para produzir este lote:\n\n";
-        res.missingItems.forEach((it) => {
-          msg += `• ${it.name}: Necessário ${it.needed}${it.unit}, disponível ${it.available}${it.unit}\n`;
-        });
-        alert(msg);
-      } else {
-        alert(`✅ Lote ${res.batchNumber} criado com sucesso!\nEstoque atualizado.`);
-        await reload();
-        renderTabContent();
+      const parsed = JSON.parse(reader.result);
+      if (!Array.isArray(parsed.items) || !Array.isArray(parsed.formulas)) {
+        showToast("Esse arquivo não parece um backup válido do laboratório.");
+        return;
       }
+      parsed.accords = Array.isArray(parsed.accords) ? parsed.accords : [];
+      parsed.perfumes = Array.isArray(parsed.perfumes) ? parsed.perfumes : [];
+      parsed.batches = Array.isArray(parsed.batches) ? parsed.batches : [];
+      parsed.packaging = Array.isArray(parsed.packaging) ? parsed.packaging : [];
+      openImportConfirm(parsed);
     } catch (err) {
-      alert("Erro ao processar produção: " + err.message);
+      showToast("Não consegui ler esse arquivo. Confere se é o JSON exportado daqui.");
     }
   };
+  reader.readAsText(file);
 }
 
-function wireEstoqueShell() {}
+function openImportConfirm(parsed) {
+  const root = document.getElementById("modalRoot");
+  root.innerHTML = `
+    <div class="overlay" id="overlay">
+      <div class="modal" id="importModal">
+        <div class="modal-title">Importar backup</div>
+        <p style="font-size:13px;color:var(--ash);line-height:1.6;">
+          O arquivo tem ${parsed.items.length} material(is), ${parsed.formulas.length} fórmula(s), ${parsed.accords.length} acorde(s), ${parsed.perfumes.length} criação(ões), ${parsed.batches.length} lote(s) e ${parsed.packaging.length} insumo(s) de embalagem. Como tu quer aplicar?
+        </p>
+        <p style="font-size:12px;color:var(--ash-dim);line-height:1.6;">
+          <strong style="color:var(--white-dim)">Mesclar</strong> mantém o que já existe e só acrescenta o que for novo.
+          <strong style="color:var(--white-dim)">Substituir</strong> apaga o que está salvo agora e coloca só o do arquivo.
+        </p>
+        <div class="modal-actions">
+          <button class="btn-ghost" data-action="close-modal">Cancelar</button>
+          <button class="btn-ghost" data-mode="merge">Mesclar</button>
+          <button class="btn-primary" data-mode="replace">Substituir tudo</button>
+        </div>
+      </div>
+    </div>`;
+  document.getElementById("overlay").addEventListener("click", (e) => { if (e.target.id === "overlay") closeModal(); });
+  document.getElementById("importModal").addEventListener("click", (e) => e.stopPropagation());
+  root.querySelector('[data-action="close-modal"]').addEventListener("click", closeModal);
+  root.querySelectorAll("[data-mode]").forEach((btn) => {
+    btn.addEventListener("click", () => confirmImport(parsed, btn.dataset.mode));
+  });
+}
 
-/* --------------------------------- INÍCIO ---------------------------------- */
+async function confirmImport(parsed, mode) {
+  try {
+    if (mode === "replace") {
+      await sb.from("materials").delete().gte("created_at", "1900-01-01");
+      await sb.from("formulas").delete().gte("created_at", "1900-01-01");
+      await sb.from("accords").delete().gte("created_at", "1900-01-01");
+      await sb.from("perfumes").delete().gte("created_at", "1900-01-01");
+      await sb.from("batches").delete().gte("created_at", "1900-01-01");
+      await sb.from("packaging_items").delete().gte("created_at", "1900-01-01");
+      const matRows = parsed.items.map(toMaterialRow);
+      const formRows = parsed.formulas.map(toFormulaRow);
+      const accRows = parsed.accords.map(toAccordRow);
+      const perfRows = parsed.perfumes.map(toPerfumeRow);
+      const batchRows = parsed.batches.map(toBatchRow);
+      const pkgRows = parsed.packaging.map(toPackagingRow);
+      if (matRows.length) await sb.from("materials").insert(matRows);
+      if (formRows.length) await sb.from("formulas").insert(formRows);
+      if (accRows.length) await sb.from("accords").insert(accRows);
+      if (perfRows.length) await sb.from("perfumes").insert(perfRows);
+      if (batchRows.length) await sb.from("batches").insert(batchRows);
+      if (pkgRows.length) await sb.from("packaging_items").insert(pkgRows);
+    } else {
+      const dedupeKey = (it) => `${(it.name || "").toLowerCase()}|${it.family}|${it.concentration}`;
+      const existingKeys = new Set(state.items.map(dedupeKey));
+      const newMats = parsed.items.filter((it) => !existingKeys.has(dedupeKey(it))).map(toMaterialRow);
+      if (newMats.length) await sb.from("materials").insert(newMats);
+
+      const existingFormNames = new Set(state.formulas.map((f) => (f.name || "").toLowerCase()));
+      const newForms = parsed.formulas.filter((f) => !existingFormNames.has((f.name || "").toLowerCase())).map(toFormulaRow);
+      if (newForms.length) await sb.from("formulas").insert(newForms);
+
+      const existingAccordNames = new Set(state.accords.map((a) => (a.name || "").toLowerCase()));
+      const newAccords = parsed.accords.filter((a) => !existingAccordNames.has((a.name || "").toLowerCase())).map(toAccordRow);
+      if (newAccords.length) await sb.from("accords").insert(newAccords);
+
+      const existingPerfumeNames = new Set(state.perfumes.map((p) => (p.name || "").toLowerCase()));
+      const newPerfumes = parsed.perfumes.filter((p) => !existingPerfumeNames.has((p.name || "").toLowerCase())).map(toPerfumeRow);
+      if (newPerfumes.length) await sb.from("perfumes").insert(newPerfumes);
+    }
+    await reload();
+    closeModal();
+    render();
+    showToast("Backup importado com sucesso.", true);
+  } catch (e) {
+    showToast("Não consegui importar o backup pro banco.");
+  }
+}
+
+/* --------------------------------- START ------------------------------------ */
 
 (async function start() {
   render();
   await reload();
   renderTabContent();
 })();
-   
