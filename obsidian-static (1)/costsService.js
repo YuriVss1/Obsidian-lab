@@ -1,86 +1,84 @@
 /* ==========================================================================
-   OBSIDIAN — Serviço Transacional de Lotes e Movimentações de Estoque
+   OBSIDIAN — Camada de Serviços de Custo, Precificação e Validação
    ========================================================================== */
 
-import { sb } from './app.js';
-import { CostsService } from './costsService.js';
+export const CostsService = {
+  // Custo unitário real por g ou ml (R$ / unidade)
+  getUnitCost(material) {
+    if (!material.price_paid || !material.qty_purchased || Number(material.qty_purchased) <= 0) {
+      return 0;
+    }
+    return Number(material.price_paid) / Number(material.qty_purchased);
+  },
 
-export async function produceBatch({ formula, batchSizeMl, type, maturationDays, notes, materialsList }) {
-  const concPct = formula.concentrationPct || formula.concentration_pct || 100;
-  const compoundTotalMl = (batchSizeMl * concPct) / 100;
-  
-  // MÓDULO 3: Validação estrita de disponibilidade de todos os materiais
-  const missingItems = [];
-  const itemsToDeduct = [];
-
-  formula.materials.forEach((m) => {
-    const needed = (compoundTotalMl * m.percentage) / 100;
-    const inv = materialsList.find((it) => it.id === m.inventoryId);
+  // Custo total das matérias-primas para um determinado volume (ml) de fórmula
+  calcFormulaCostForVolume(formula, materialsList, volumeMl) {
+    if (!formula || !formula.materials || formula.materials.length === 0) return 0;
     
-    const available = inv ? Number(inv.quantity) : 0;
-    if (!inv || available < needed) {
-      missingItems.push({
-        name: m.name || inv?.name || 'Material desconhecido',
-        needed: needed.toFixed(2),
-        available: available.toFixed(2),
-        unit: inv ? inv.unit : 'g'
-      });
-    } else {
-      itemsToDeduct.push({
-        materialId: inv.id,
-        currentQty: available,
-        deductQty: needed,
-        newQty: available - needed,
-        unit: inv.unit,
-        name: inv.name
+    // Total de concentrado de fragrância necessário em ml/g
+    const compoundVolumeMl = (volumeMl * (formula.concentrationPct || formula.concentration_pct || 100)) / 100;
+
+    let totalCost = 0;
+    formula.materials.forEach((m) => {
+      const inv = materialsList.find((it) => it.id === m.inventoryId);
+      if (inv) {
+        const neededQty = (compoundVolumeMl * (m.percentage || 0)) / 100;
+        const unitCost = this.getUnitCost(inv);
+        totalCost += neededQty * unitCost;
+      }
+    });
+
+    return totalCost;
+  },
+
+  // MÓDULO 12: Produção máxima possível baseada no ingrediente limitante
+  calcMaxProduction(formula, materialsList) {
+    if (!formula || !formula.materials || formula.materials.length === 0) return 0;
+
+    let maxMl = Infinity;
+
+    formula.materials.forEach((m) => {
+      const inv = materialsList.find((it) => it.id === m.inventoryId);
+      if (!inv || m.percentage <= 0) return;
+
+      const available = Number(inv.quantity) || 0;
+      // Proporção do ingrediente no produto final considerando a diluição
+      const effPct = ((formula.concentrationPct || formula.concentration_pct || 100) / 100) * (m.percentage / 100);
+      
+      if (effPct > 0) {
+        const possibleForThisMat = available / effPct;
+        if (possibleForThisMat < maxMl) {
+          maxMl = possibleForThisMat;
+        }
+      }
+    });
+
+    return maxMl === Infinity ? 0 : Math.floor(maxMl);
+  },
+
+  // MÓDULO 18 e 19: Custo final do Perfume + Embalagens + Precificação
+  calcPerfumeTotalCost(perfume, formula, materialsList, packagingList, volumeMl = 50) {
+    const rawMaterialCost = formula ? this.calcFormulaCostForVolume(formula, materialsList, volumeMl) : 0;
+    
+    let packagingCost = 0;
+    if (perfume && Array.isArray(perfume.packaging_ids)) {
+      perfume.packaging_ids.forEach((pkgId) => {
+        const pkg = packagingList.find((p) => p.id === pkgId);
+        if (pkg) packagingCost += Number(pkg.price || 0);
       });
     }
-  });
 
-  // Não permite produção parcial
-  if (missingItems.length > 0) {
-    return { success: false, missingItems };
+    const totalCost = rawMaterialCost + packagingCost;
+    const markup = Number(perfume?.markup) || 4.0;
+    const suggestedPrice = totalCost * markup;
+
+    return {
+      rawMaterialCost,
+      packagingCost,
+      totalCost,
+      markup,
+      suggestedPrice
+    };
   }
-
-  // MÓDULO 16: Cálculo dos Custos Financeiros do Lote
-  const totalCost = CostsService.calcFormulaCostForVolume(formula, materialsList, batchSizeMl);
-  const costPerMl = batchSizeMl > 0 ? totalCost / batchSizeMl : 0;
-  const batchNumber = `DJ-${Math.floor(1000 + Math.random() * 9000)}`;
-
-  // MÓDULO 4 e 5: Desconto Automático + Histórico de Movimentações
-  for (const item of itemsToDeduct) {
-    const { error: updateErr } = await sb.from('materials')
-      .update({ quantity: item.newQty })
-      .eq('id', item.materialId);
-
-    if (updateErr) throw new Error(`Falha ao descontar estoque do ingrediente ${item.name}`);
-
-    await sb.from('stock_movements').insert({
-      material_id: item.materialId,
-      type: 'saida',
-      quantity: item.deductQty,
-      unit: item.unit,
-      origin: `Lote ${batchNumber}`,
-      notes: `Produção de ${batchSizeMl}ml do produto (${formula.name})`
-    });
-  }
-
-  // MÓDULO 1 e 9: Gravação do Lote com Maturação
-  const { data: newBatch, error: batchErr } = await sb.from('batches').insert({
-    batch_number: batchNumber,
-    formula_id: formula.id,
-    formula_name: formula.name,
-    size_ml: batchSizeMl,
-    type,
-    maturation_days: maturationDays,
-    total_cost: totalCost,
-    cost_per_ml: costPerMl,
-    materials_snapshot: formula.materials,
-    notes,
-    log: [{ date: new Date().toISOString(), note: `Lote ${batchNumber} iniciado em maceração (${maturationDays} dias).` }]
-  }).select().single();
-
-  if (batchErr) throw new Error("Erro ao registrar o novo lote no banco de dados.");
-
-  return { success: true, batch: newBatch, batchNumber };
-      }
+};
+           
