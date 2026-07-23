@@ -161,6 +161,10 @@ input, select, textarea { font-family:'Inter',sans-serif; }
 
 .cost-box { border-top:1px solid var(--hair-soft); padding-top:10px; display:flex; flex-direction:column; gap:4px; }
 
+.compat-box { background:var(--charcoal); border:1px solid var(--hair); border-radius:8px; padding:12px; display:flex; flex-direction:column; gap:6px; }
+.compat-note { font-size:11.5px; }
+.compat-disclaimer { font-size:10px; color:var(--ash-dim); font-style:italic; margin-top:4px; }
+
 .mov-list { display:flex; flex-direction:column; gap:6px; margin-top:10px; max-height:320px; overflow-y:auto; }
 .mov-row { display:grid; grid-template-columns:70px 1fr 70px 70px 1fr; gap:8px; font-size:11.5px; align-items:center; padding:6px 0; border-bottom:1px solid var(--hair-soft); }
 .mov-date { color:var(--ash-dim); font-family:'JetBrains Mono',monospace; }

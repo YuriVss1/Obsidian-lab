@@ -121,6 +121,140 @@ const fmt = (n) => (Number.isFinite(n) ? (Math.round(n * 100) / 100).toString() 
 const esc = (s) =>
   String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 
+/* ---------------------------- MATCH DE COMPATIBILIDADE ---------------------- */
+// Motor baseado em pareamentos clássicos de perfumaria (teoria de acordes/famílias).
+// É um modelo heurístico, não uma verdade absoluta — serve como bússola, não veredito.
+
+const FAMILY_PAIRS = [
+  // cítrico
+  ["citrico", "amadeirado", 1.0], ["citrico", "aquatico", 1.0], ["citrico", "chipre", 1.0],
+  ["citrico", "floral", 0.7], ["citrico", "verde", 0.7], ["citrico", "aldeidico", 0.6],
+  ["citrico", "especiado", 0.6], ["citrico", "almiscarado", 0.5], ["citrico", "ambar", 0.3],
+  ["citrico", "gourmand", 0.0], ["citrico", "animalico", -0.2],
+  // floral
+  ["floral", "almiscarado", 1.0], ["floral", "verde", 0.8], ["floral", "amadeirado", 0.8],
+  ["floral", "aldeidico", 0.8], ["floral", "chipre", 0.7], ["floral", "ambar", 0.6],
+  ["floral", "aquatico", 0.6], ["floral", "especiado", 0.5], ["floral", "gourmand", 0.5],
+  ["floral", "animalico", 0.5],
+  // amadeirado
+  ["amadeirado", "ambar", 1.0], ["amadeirado", "especiado", 0.8], ["amadeirado", "chipre", 0.8],
+  ["amadeirado", "almiscarado", 0.8], ["amadeirado", "aquatico", 0.6], ["amadeirado", "gourmand", 0.6],
+  ["amadeirado", "verde", 0.6], ["amadeirado", "animalico", 0.5], ["amadeirado", "aldeidico", 0.2],
+  // âmbar
+  ["ambar", "especiado", 1.0], ["ambar", "gourmand", 0.8], ["ambar", "almiscarado", 0.8],
+  ["ambar", "animalico", 0.6], ["ambar", "chipre", 0.6], ["ambar", "aldeidico", 0.1],
+  ["ambar", "verde", -0.2], ["ambar", "aquatico", -0.3],
+  // especiado
+  ["especiado", "gourmand", 0.6], ["especiado", "almiscarado", 0.5], ["especiado", "chipre", 0.5],
+  ["especiado", "animalico", 0.4], ["especiado", "verde", 0.3], ["especiado", "aldeidico", 0.1],
+  ["especiado", "aquatico", -0.3],
+  // almiscarado
+  ["almiscarado", "gourmand", 0.7], ["almiscarado", "aquatico", 0.6], ["almiscarado", "chipre", 0.5],
+  ["almiscarado", "animalico", 0.5], ["almiscarado", "verde", 0.4], ["almiscarado", "aldeidico", 0.3],
+  // aquático
+  ["aquatico", "verde", 0.8], ["aquatico", "aldeidico", 0.5], ["aquatico", "chipre", 0.0],
+  ["aquatico", "gourmand", -0.4], ["aquatico", "animalico", -0.5],
+  // verde
+  ["verde", "chipre", 0.6], ["verde", "aldeidico", 0.4], ["verde", "gourmand", -0.3], ["verde", "animalico", -0.3],
+  // chipre
+  ["chipre", "animalico", 0.5], ["chipre", "aldeidico", 0.5], ["chipre", "gourmand", 0.1],
+  // gourmand
+  ["gourmand", "aldeidico", 0.1], ["gourmand", "animalico", -0.1],
+  // aldeídico
+  ["aldeidico", "animalico", 0.3],
+];
+
+const AFFINITY_MAP = {};
+FAMILY_PAIRS.forEach(([a, b, score]) => {
+  AFFINITY_MAP[a] = AFFINITY_MAP[a] || {};
+  AFFINITY_MAP[b] = AFFINITY_MAP[b] || {};
+  AFFINITY_MAP[a][b] = score;
+  AFFINITY_MAP[b][a] = score;
+});
+
+function familyAffinity(famA, famB) {
+  if (!famA || !famB) return 0;
+  if (famA === famB) return 0.6;
+  if (AFFINITY_MAP[famA] && AFFINITY_MAP[famA][famB] != null) return AFFINITY_MAP[famA][famB];
+  return 0; // par não catalogado — neutro por padrão, nunca inventa julgamento
+}
+
+// materials: [{ family, percentage, position }] — position pode ser null (desconhecida)
+function computeCompatibility(materials) {
+  const valid = materials.filter((m) => m.family && m.percentage > 0);
+  if (valid.length < 2) return null;
+
+  let weightedSum = 0;
+  let weightTotal = 0;
+  let bestPair = null;
+  let worstPair = null;
+
+  for (let i = 0; i < valid.length; i++) {
+    for (let j = i + 1; j < valid.length; j++) {
+      const a = valid[i], b = valid[j];
+      const score = familyAffinity(a.family, b.family);
+      const weight = (a.percentage / 100) * (b.percentage / 100);
+      weightedSum += score * weight;
+      weightTotal += weight;
+      if (a.family !== b.family) {
+        if (!bestPair || score > bestPair.score) bestPair = { a: a.family, b: b.family, score };
+        if (!worstPair || score < worstPair.score) worstPair = { a: a.family, b: b.family, score };
+      }
+    }
+  }
+
+  const finalScore = weightTotal > 0 ? weightedSum / weightTotal : 0;
+
+  let label, colorVar;
+  if (finalScore >= 0.6) { label = "Excelente combinação"; colorVar = "var(--ok)"; }
+  else if (finalScore >= 0.3) { label = "Boa combinação"; colorVar = "var(--ok)"; }
+  else if (finalScore >= -0.1) { label = "Combinação neutra — funciona com ajuste fino"; colorVar = "var(--gold)"; }
+  else if (finalScore >= -0.4) { label = "Atenção — pode conflitar"; colorVar = "var(--danger)"; }
+  else { label = "Risco de conflito — famílias muito opostas"; colorVar = "var(--danger)"; }
+
+  // equilíbrio da pirâmide, só considerando materiais com posição conhecida
+  const withPos = materials.filter((m) => m.position && m.percentage > 0);
+  let positionNote = null;
+  if (withPos.length > 0) {
+    const sums = { topo: 0, coracao: 0, fundo: 0 };
+    let total = 0;
+    withPos.forEach((m) => { sums[m.position] += m.percentage; total += m.percentage; });
+    const missing = POSITIONS.filter((p) => sums[p.key] === 0).map((p) => p.label);
+    const dominant = POSITIONS.find((p) => total > 0 && sums[p.key] / total > 0.75);
+    if (missing.length === POSITIONS.length - 1 && missing.length > 0) {
+      // só uma nota está representada
+      positionNote = `Praticamente só tem nota de ${POSITIONS.find((p) => !missing.includes(p.label)).label.toLowerCase()} — considera adicionar outras camadas.`;
+    } else if (dominant) {
+      positionNote = `Mais de 75% do acorde está em ${dominant.label.toLowerCase()} — pode evaporar/mudar rápido demais.` ;
+    } else if (missing.length > 0) {
+      positionNote = `Sem nenhum material de ${missing.join(" e ").toLowerCase()} classificado ainda.`;
+    }
+  }
+
+  return { score: finalScore, label, colorVar, bestPair, worstPair, positionNote, materialsConsidered: valid.length };
+}
+
+function compatibilityPanelHtml(result) {
+  if (!result) return `<div class="compat-box"><div class="log-empty">Adiciona pelo menos 2 materiais com família e % preenchidos pra ver o match.</div></div>`;
+  const pct = Math.round(((result.score + 1) / 2) * 100); // normaliza -1..1 pra 0..100%
+  const bestTxt = result.bestPair && result.bestPair.score > 0.3
+    ? `<div class="compat-note" style="color:var(--ok);">✓ ${esc(famMap[result.bestPair.a]?.label || result.bestPair.a)} + ${esc(famMap[result.bestPair.b]?.label || result.bestPair.b)} têm boa afinidade</div>`
+    : "";
+  const worstTxt = result.worstPair && result.worstPair.score < -0.1
+    ? `<div class="compat-note" style="color:var(--danger);">⚠ ${esc(famMap[result.worstPair.a]?.label || result.worstPair.a)} e ${esc(famMap[result.worstPair.b]?.label || result.worstPair.b)} tendem a competir</div>`
+    : "";
+  const posTxt = result.positionNote ? `<div class="compat-note" style="color:var(--ash-dim);">${esc(result.positionNote)}</div>` : "";
+  return `
+    <div class="compat-box">
+      <div class="maturity-row">
+        <div class="maturity-bar"><div class="maturity-fill" style="width:${pct}%;background:${result.colorVar}"></div></div>
+        <span class="maturity-label" style="color:${result.colorVar}">${esc(result.label)}</span>
+      </div>
+      ${bestTxt}${worstTxt}${posTxt}
+      <div class="compat-disclaimer">baseado em pareamentos clássicos de família olfativa — usa como referência, não como regra fixa</div>
+    </div>`;
+}
+
 /* ----------------------------- DB <-> JS ---------------------------------- */
 
 const mapMaterialFromDb = (row) => ({
@@ -1254,6 +1388,7 @@ function openFormulaModal(editId) {
         <label class="label" style="margin-top:16px;">Materiais da fórmula (% do composto, soma ideal = 100%)</label>
         <div id="rowsContainer"></div>
         <button type="button" class="add-row-btn" id="addRowBtn">+ adicionar material</button>
+        <div id="formulaCompatBox" style="margin-top:12px;"></div>
 
         <label class="label">Notas</label>
         <textarea class="input" id="ff-notes" style="min-height:60px;resize:vertical;">${editing ? esc(editing.notes) : ""}</textarea>
@@ -1279,6 +1414,7 @@ function openFormulaModal(editId) {
 
   renderFormulaRows();
   document.getElementById("addRowBtn").addEventListener("click", () => {
+    syncFormulaRowsFromDom();
     formulaRows.push({ rowId: uid(), inventoryId: "", name: "", family: "citrico", concLabel: "", position: "coracao", percentage: "" });
     renderFormulaRows();
   });
@@ -1352,6 +1488,21 @@ function inventoryOptionsHtml(selectedId) {
   return html;
 }
 
+function syncFormulaRowsFromDom() {
+  formulaRows.forEach((row) => {
+    const invSelect = document.getElementById("row-inv-" + row.rowId);
+    const nameInput = document.getElementById("row-name-" + row.rowId);
+    const famSelect = document.getElementById("row-fam-" + row.rowId);
+    const posSelect = document.getElementById("row-pos-" + row.rowId);
+    const pctInput = document.getElementById("row-pct-" + row.rowId);
+    if (invSelect) row.inventoryId = invSelect.value;
+    if (nameInput) row.name = nameInput.value;
+    if (famSelect) row.family = famSelect.value;
+    if (posSelect) row.position = posSelect.value;
+    if (pctInput) row.percentage = pctInput.value;
+  });
+}
+
 function renderFormulaRows() {
   const container = document.getElementById("rowsContainer");
   container.innerHTML = formulaRows
@@ -1399,10 +1550,12 @@ function renderFormulaRows() {
           if (posSelect) posSelect.value = inv.typicalPosition;
         }
       }
+      updateFormulaCompatibility();
     });
     const removeBtn = container.querySelector(`[data-remove="${row.rowId}"]`);
     if (removeBtn) {
       removeBtn.addEventListener("click", () => {
+        syncFormulaRowsFromDom();
         formulaRows = formulaRows.filter((r) => r.rowId !== row.rowId);
         renderFormulaRows();
       });
@@ -1412,9 +1565,38 @@ function renderFormulaRows() {
       nameInput.addEventListener("input", (e) => {
         const guess = guessFamily(e.target.value);
         if (guess) document.getElementById("row-fam-" + row.rowId).value = guess;
+        updateFormulaCompatibility();
       });
     }
+    const famSelect = document.getElementById("row-fam-" + row.rowId);
+    if (famSelect) famSelect.addEventListener("change", updateFormulaCompatibility);
+    const posSelect = document.getElementById("row-pos-" + row.rowId);
+    if (posSelect) posSelect.addEventListener("change", updateFormulaCompatibility);
+    const pctInput = document.getElementById("row-pct-" + row.rowId);
+    if (pctInput) pctInput.addEventListener("input", updateFormulaCompatibility);
   });
+
+  updateFormulaCompatibility();
+}
+
+function updateFormulaCompatibility() {
+  const box = document.getElementById("formulaCompatBox");
+  if (!box) return;
+  const materials = formulaRows.map((row) => {
+    const invSelect = document.getElementById("row-inv-" + row.rowId);
+    const pctInput = document.getElementById("row-pct-" + row.rowId);
+    const posSelect = document.getElementById("row-pos-" + row.rowId);
+    let family;
+    if (invSelect && invSelect.value) {
+      const inv = state.items.find((it) => it.id === invSelect.value);
+      family = inv ? inv.family : null;
+    } else {
+      const famSelect = document.getElementById("row-fam-" + row.rowId);
+      family = famSelect ? famSelect.value : null;
+    }
+    return { family, position: posSelect ? posSelect.value : null, percentage: parseFloat(pctInput ? pctInput.value : 0) || 0 };
+  });
+  box.innerHTML = compatibilityPanelHtml(computeCompatibility(materials));
 }
 
 /* -------------------------------- LOTES TAB --------------------------------- */
@@ -1890,6 +2072,7 @@ function openAccordModal(editId) {
         <label class="label" style="margin-top:16px;">Materiais do acorde (%)</label>
         <div id="accordRowsContainer"></div>
         <button type="button" class="add-row-btn" id="addAccordRowBtn">+ adicionar material</button>
+        <div id="accordCompatBox" style="margin-top:12px;"></div>
 
         <label class="label">Notas</label>
         <textarea class="input" id="ac-notes" style="min-height:60px;resize:vertical;">${editing ? esc(editing.notes) : ""}</textarea>
@@ -1909,6 +2092,7 @@ function openAccordModal(editId) {
 
   renderAccordRows();
   document.getElementById("addAccordRowBtn").addEventListener("click", () => {
+    syncAccordRowsFromDom();
     accordRows.push({ rowId: uid(), inventoryId: "", name: "", percentage: "" });
     renderAccordRows();
   });
@@ -1951,6 +2135,17 @@ function openAccordModal(editId) {
   });
 }
 
+function syncAccordRowsFromDom() {
+  accordRows.forEach((row) => {
+    const invSelect = document.getElementById("acrow-inv-" + row.rowId);
+    const nameInput = document.getElementById("acrow-name-" + row.rowId);
+    const pctInput = document.getElementById("acrow-pct-" + row.rowId);
+    if (invSelect) row.inventoryId = invSelect.value;
+    if (nameInput) row.name = nameInput.value;
+    if (pctInput) row.percentage = pctInput.value;
+  });
+}
+
 function renderAccordRows() {
   const container = document.getElementById("accordRowsContainer");
   container.innerHTML = accordRows
@@ -1976,11 +2171,40 @@ function renderAccordRows() {
     invSelect.addEventListener("change", () => {
       const wrap = container.querySelector(".manual-fields-" + row.rowId);
       if (wrap) wrap.style.display = invSelect.value ? "none" : "";
+      updateAccordCompatibility();
     });
     const removeBtn = container.querySelector(`[data-remove="${row.rowId}"]`);
-    if (removeBtn) removeBtn.addEventListener("click", () => { accordRows = accordRows.filter((r) => r.rowId !== row.rowId); renderAccordRows(); });
+    if (removeBtn) removeBtn.addEventListener("click", () => { syncAccordRowsFromDom(); accordRows = accordRows.filter((r) => r.rowId !== row.rowId); renderAccordRows(); });
+    const nameInput = document.getElementById("acrow-name-" + row.rowId);
+    if (nameInput) nameInput.addEventListener("input", updateAccordCompatibility);
+    const pctInput = document.getElementById("acrow-pct-" + row.rowId);
+    if (pctInput) pctInput.addEventListener("input", updateAccordCompatibility);
   });
+
+  updateAccordCompatibility();
 }
+
+function accordRowFamilyAndPosition(row) {
+  if (row.inventoryId) {
+    const inv = state.items.find((it) => it.id === row.inventoryId);
+    return { family: inv ? inv.family : null, position: inv ? inv.typicalPosition : null };
+  }
+  const nameInput = document.getElementById("acrow-name-" + row.rowId);
+  const name = nameInput ? nameInput.value : row.name;
+  return { family: guessFamily(name), position: null };
+}
+
+function updateAccordCompatibility() {
+  const box = document.getElementById("accordCompatBox");
+  if (!box) return;
+  const materials = accordRows.map((row) => {
+    const pctInput = document.getElementById("acrow-pct-" + row.rowId);
+    const { family, position } = accordRowFamilyAndPosition(row);
+    return { family, position, percentage: parseFloat(pctInput ? pctInput.value : 0) || 0 };
+  });
+  box.innerHTML = compatibilityPanelHtml(computeCompatibility(materials));
+}
+
 
 /* -------------------------------- PERFUMES TAB ------------------------------ */
 

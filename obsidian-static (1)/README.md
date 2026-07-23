@@ -34,6 +34,11 @@ arquivos pro GitHub, sem precisar de Node/npm/git instalados na tua máquina.
 - **Movimentações de estoque**: toda saída de um lote fica registrada
   automaticamente. Também dá pra registrar entrada/saída/ajuste manual
   (reposição de estoque, correção de contagem).
+- **Match de compatibilidade**: ao montar um Acorde ou uma Fórmula, um painel ao
+  vivo mostra se as famílias olfativas escolhidas combinam bem, com base em
+  pareamentos clássicos de perfumaria (ex: cítrico+chipre, âmbar+especiado).
+  Mostra a melhor e a pior dupla, e um aviso se a pirâmide topo/coração/fundo
+  ficou desequilibrada. É uma bússola heurística, não uma regra fixa.
 - **Backup**: exportar/importar tudo (materiais, fórmulas, acordes, perfumes)
   em `.json` (mesclar ou substituir).
 - Banco de dados real no **Supabase** (Postgres) — não depende de navegador
