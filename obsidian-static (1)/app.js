@@ -121,6 +121,14 @@ const fmt = (n) => (Number.isFinite(n) ? (Math.round(n * 100) / 100).toString() 
 const esc = (s) =>
   String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 
+const ICONS = {
+  search: `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="11" cy="11" r="7"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>`,
+  edit: `<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.12 2.12 0 013 3L7 19l-4 1 1-4z"/></svg>`,
+  trash: `<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 01-2 2H8a2 2 0 01-2-2L5 6"/><path d="M10 11v6"/><path d="M14 11v6"/><path d="M9 6V4a2 2 0 012-2h2a2 2 0 012 2v2"/></svg>`,
+  close: `<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>`,
+  flask: `<svg width="34" height="34" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><path d="M9 2v6.5L4 18a2 2 0 002 3h12a2 2 0 002-3l-5-9.5V2"/><line x1="8.5" y1="2" x2="15.5" y2="2"/><line x1="7" y1="14" x2="17" y2="14"/></svg>`,
+};
+
 /* ---------------------------- MATCH DE COMPATIBILIDADE ---------------------- */
 // Motor baseado em pareamentos clássicos de perfumaria (teoria de acordes/famílias).
 // É um modelo heurístico, não uma verdade absoluta — serve como bússola, não veredito.
@@ -729,8 +737,15 @@ function render() {
     <div class="shell">
       <div class="topbar">
         <div class="mark">
-          <span class="mark-word">Obsidian</span>
-          <span class="mark-sub">Laboratório</span>
+          <svg class="mark-icon" width="30" height="30" viewBox="0 0 32 32" fill="none">
+            <rect width="32" height="32" rx="7" fill="#131317"/>
+            <path d="M16 5 L26 16 L16 27 L6 16 Z" stroke="#C9A227" stroke-width="1.6"/>
+            <circle cx="16" cy="16" r="3" fill="#C9A227"/>
+          </svg>
+          <div class="mark-text">
+            <span class="mark-word">Obsidian</span>
+            <span class="mark-sub">Laboratório</span>
+          </div>
         </div>
         <div class="tabs">
           ${TABS.map((t) => `<button class="tab-btn ${state.tab === t.key ? "active" : ""}" data-action="tab" data-tab="${t.key}">${esc(t.label)}</button>`).join("")}
@@ -753,7 +768,7 @@ function render() {
 function renderTabContent() {
   const el = document.getElementById("tabContent");
   if (!state.loaded) {
-    el.innerHTML = `<div class="empty">Carregando laboratório...</div>`;
+    el.innerHTML = `<div class="loading-state"><div class="spinner"></div><span>Carregando laboratório...</span></div>`;
     return;
   }
   if (state.tab === "estoque") { el.innerHTML = estoqueShellHtml(); wireEstoqueShell(); }
@@ -770,7 +785,10 @@ function estoqueShellHtml() {
     <div class="spectrum" id="spectrum"></div>
     <div class="controls">
       <div class="controls-row">
-        <input class="search" id="searchInput" placeholder="Buscar por nome ou CAS..." value="${esc(state.search)}" />
+        <div class="search-wrap">
+          <span class="search-icon">${ICONS.search}</span>
+          <input class="search" id="searchInput" placeholder="Buscar por nome ou CAS..." value="${esc(state.search)}" />
+        </div>
         <button class="btn-primary" data-action="new-material">+ Novo material</button>
       </div>
       <div class="chips scroll" id="categoryChips"></div>
@@ -894,7 +912,7 @@ function updateMaterialsList() {
   if (state.items.length === 0) {
     el.innerHTML = `
       <div class="empty">
-        <div class="empty-title">Estoque vazio</div>
+        <div class="empty-icon">${ICONS.flask}</div><div class="empty-title">Estoque vazio</div>
         <div class="empty-sub">Cadastre teu primeiro material — químico, óleo essencial ou absoluto — pra organizar por família olfativa e diluição.</div>
         <button class="btn-primary" data-action="new-material">+ Novo material</button>
       </div>`;
@@ -952,8 +970,8 @@ function materialCardHtml(it, f) {
         </div>
         ${it.notes ? `<div class="card-notes">${esc(it.notes)}</div>` : ""}
         <div class="card-actions">
-          <button class="btn-text" data-action="edit-material" data-id="${it.id}">editar</button>
-          <button class="btn-text danger" data-action="delete-material" data-id="${it.id}">remover</button>
+          <button class="btn-text" data-action="edit-material" data-id="${it.id}"><span class="btn-icon">${ICONS.edit}</span>editar</button>
+          <button class="btn-text danger" data-action="delete-material" data-id="${it.id}"><span class="btn-icon">${ICONS.trash}</span>remover</button>
         </div>
       </div>
     </div>`;
@@ -975,7 +993,7 @@ function openMaterialModal(editId, presetFamily) {
   root.innerHTML = `
     <div class="overlay" id="overlay">
       <form class="modal" id="materialForm">
-        <div class="modal-title">${editing ? "Editar material" : "Novo material"}</div>
+        <div class="modal-header"><div class="modal-title">${editing ? "Editar material" : "Novo material"}</div><button type="button" class="modal-close" data-action="close-modal" aria-label="Fechar">${ICONS.close}</button></div>
 
         <label class="label">Nome</label>
         <input class="input" id="f-name" value="${editing ? esc(editing.name) : ""}" placeholder="Ex: Iso E Super" />
@@ -1084,7 +1102,7 @@ function openMaterialModal(editId, presetFamily) {
     if (e.target.id === "overlay") closeModal();
   });
   document.getElementById("materialForm").addEventListener("click", (e) => e.stopPropagation());
-  root.querySelector('[data-action="close-modal"]').addEventListener("click", closeModal);
+  root.querySelectorAll('[data-action="close-modal"]').forEach((el) => el.addEventListener("click", closeModal));
 
   document.getElementById("f-name").addEventListener("input", (e) => {
     if (familyTouched) return;
@@ -1204,7 +1222,7 @@ function renderFormulasGrid() {
   if (sorted.length === 0) {
     el.innerHTML = `
       <div class="empty">
-        <div class="empty-title">Nenhuma criação registrada</div>
+        <div class="empty-icon">${ICONS.flask}</div><div class="empty-title">Nenhuma criação registrada</div>
         <div class="empty-sub">Cadastre a fórmula de uma criação: os materiais, a posição de cada um na pirâmide olfativa e a concentração final do frasco.</div>
         <button class="btn-primary" data-action="new-formula">+ Nova fórmula</button>
       </div>`;
@@ -1285,8 +1303,8 @@ function formulaCardHtml(formula, number) {
       </div>
       <div class="fcard-actions">
         <div class="fcard-actions-left">
-          <button class="btn-text" data-action="edit-formula" data-id="${formula.id}">editar</button>
-          <button class="btn-text danger" data-action="delete-formula" data-id="${formula.id}">remover</button>
+          <button class="btn-text" data-action="edit-formula" data-id="${formula.id}"><span class="btn-icon">${ICONS.edit}</span>editar</button>
+          <button class="btn-text danger" data-action="delete-formula" data-id="${formula.id}"><span class="btn-icon">${ICONS.trash}</span>remover</button>
         </div>
         <button class="btn-ghost small" data-action="produce-lote" data-id="${formula.id}">Produzir lote</button>
       </div>
@@ -1364,7 +1382,7 @@ function openFormulaModal(editId) {
   root.innerHTML = `
     <div class="overlay" id="overlay">
       <form class="modal modal-wide" id="formulaForm">
-        <div class="modal-title">${editing ? "Editar fórmula" : "Nova fórmula"}</div>
+        <div class="modal-header"><div class="modal-title">${editing ? "Editar fórmula" : "Nova fórmula"}</div><button type="button" class="modal-close" data-action="close-modal" aria-label="Fechar">${ICONS.close}</button></div>
 
         <label class="label">Nome da criação</label>
         <input class="input" id="ff-name" value="${editing ? esc(editing.name) : ""}" placeholder="Ex: Brasa de Mel" />
@@ -1405,7 +1423,7 @@ function openFormulaModal(editId) {
 
   document.getElementById("overlay").addEventListener("click", (e) => { if (e.target.id === "overlay") closeModal(); });
   document.getElementById("formulaForm").addEventListener("click", (e) => e.stopPropagation());
-  root.querySelector('[data-action="close-modal"]').addEventListener("click", closeModal);
+  root.querySelectorAll('[data-action="close-modal"]').forEach((el) => el.addEventListener("click", closeModal));
 
   document.getElementById("ff-concType").addEventListener("change", (e) => {
     const preset = CONC_PRESETS.find((p) => p.label === e.target.value);
@@ -1643,7 +1661,7 @@ function renderLotesGrid() {
   if (sorted.length === 0) {
     el.innerHTML = `
       <div class="empty">
-        <div class="empty-title">Nenhum lote produzido ainda</div>
+        <div class="empty-icon">${ICONS.flask}</div><div class="empty-title">Nenhum lote produzido ainda</div>
         <div class="empty-sub">Vai na aba Fórmulas e clica em "Produzir lote" numa criação — o sistema calcula os ingredientes, valida o estoque e desconta automaticamente.</div>
       </div>`;
     return;
@@ -1676,7 +1694,7 @@ function loteCardHtml(l) {
       </div>
       <div class="fcard-actions">
         <div class="fcard-actions-left">
-          <button class="btn-text danger" data-action="delete-lote" data-id="${l.id}">remover</button>
+          <button class="btn-text danger" data-action="delete-lote" data-id="${l.id}"><span class="btn-icon">${ICONS.trash}</span>remover</button>
         </div>
       </div>
     </div>`;
@@ -1723,7 +1741,7 @@ function openLoteModal(formula) {
   root.innerHTML = `
     <div class="overlay" id="overlay">
       <form class="modal" id="loteForm">
-        <div class="modal-title">Produzir lote de ${esc(formula.name)}</div>
+        <div class="modal-header"><div class="modal-title">Produzir lote de ${esc(formula.name)}</div><button type="button" class="modal-close" data-action="close-modal" aria-label="Fechar">${ICONS.close}</button></div>
 
         <label class="label">Quantidade desejada (ml)</label>
         <input class="input" id="lt-volume" type="number" step="0.1" value="100" />
@@ -1761,7 +1779,7 @@ function openLoteModal(formula) {
 
   document.getElementById("overlay").addEventListener("click", (e) => { if (e.target.id === "overlay") closeModal(); });
   document.getElementById("loteForm").addEventListener("click", (e) => e.stopPropagation());
-  root.querySelector('[data-action="close-modal"]').addEventListener("click", closeModal);
+  root.querySelectorAll('[data-action="close-modal"]').forEach((el) => el.addEventListener("click", closeModal));
 
   document.getElementById("lt-maturation").addEventListener("change", (e) => {
     document.getElementById("lt-customWrap").style.display = e.target.value === "custom" ? "" : "none";
@@ -1843,7 +1861,7 @@ function openMovementModal() {
   root.innerHTML = `
     <div class="overlay" id="overlay">
       <form class="modal" id="movementForm">
-        <div class="modal-title">Registrar movimentação</div>
+        <div class="modal-header"><div class="modal-title">Registrar movimentação</div><button type="button" class="modal-close" data-action="close-modal" aria-label="Fechar">${ICONS.close}</button></div>
 
         <label class="label">Material</label>
         <select class="input" id="mv-material">
@@ -1878,7 +1896,7 @@ function openMovementModal() {
 
   document.getElementById("overlay").addEventListener("click", (e) => { if (e.target.id === "overlay") closeModal(); });
   document.getElementById("movementForm").addEventListener("click", (e) => e.stopPropagation());
-  root.querySelector('[data-action="close-modal"]').addEventListener("click", closeModal);
+  root.querySelectorAll('[data-action="close-modal"]').forEach((el) => el.addEventListener("click", closeModal));
 
   document.getElementById("mv-type").addEventListener("change", (e) => {
     document.getElementById("mv-qtyHint").textContent =
@@ -1975,7 +1993,7 @@ function renderAccordsGrid() {
   if (sorted.length === 0) {
     el.innerHTML = `
       <div class="empty">
-        <div class="empty-title">Nenhum acorde em teste</div>
+        <div class="empty-icon">${ICONS.flask}</div><div class="empty-title">Nenhum acorde em teste</div>
         <div class="empty-sub">Cadastre um acorde pra acompanhar a maceração — a cor muda de vermelho pra maduro conforme os dias passam.</div>
         <button class="btn-primary" data-action="new-accord">+ Novo acorde</button>
       </div>`;
@@ -2009,8 +2027,8 @@ function accordCardHtml(a) {
       </div>
       <div class="fcard-actions">
         <div class="fcard-actions-left">
-          <button class="btn-text" data-action="edit-accord" data-id="${a.id}">editar</button>
-          <button class="btn-text danger" data-action="delete-accord" data-id="${a.id}">remover</button>
+          <button class="btn-text" data-action="edit-accord" data-id="${a.id}"><span class="btn-icon">${ICONS.edit}</span>editar</button>
+          <button class="btn-text danger" data-action="delete-accord" data-id="${a.id}"><span class="btn-icon">${ICONS.trash}</span>remover</button>
         </div>
       </div>
     </div>`;
@@ -2060,7 +2078,7 @@ function openAccordModal(editId) {
   root.innerHTML = `
     <div class="overlay" id="overlay">
       <form class="modal modal-wide" id="accordForm">
-        <div class="modal-title">${editing ? "Editar acorde" : "Novo acorde"}</div>
+        <div class="modal-header"><div class="modal-title">${editing ? "Editar acorde" : "Novo acorde"}</div><button type="button" class="modal-close" data-action="close-modal" aria-label="Fechar">${ICONS.close}</button></div>
 
         <label class="label">Nome do acorde</label>
         <input class="input" id="ac-name" value="${editing ? esc(editing.name) : ""}" placeholder="Ex: Acorde âmbar modificado" />
@@ -2088,7 +2106,7 @@ function openAccordModal(editId) {
 
   document.getElementById("overlay").addEventListener("click", (e) => { if (e.target.id === "overlay") closeModal(); });
   document.getElementById("accordForm").addEventListener("click", (e) => e.stopPropagation());
-  root.querySelector('[data-action="close-modal"]').addEventListener("click", closeModal);
+  root.querySelectorAll('[data-action="close-modal"]').forEach((el) => el.addEventListener("click", closeModal));
 
   renderAccordRows();
   document.getElementById("addAccordRowBtn").addEventListener("click", () => {
@@ -2241,7 +2259,7 @@ function renderPerfumesGrid() {
   if (sorted.length === 0) {
     el.innerHTML = `
       <div class="empty">
-        <div class="empty-title">Nenhuma criação em acompanhamento</div>
+        <div class="empty-icon">${ICONS.flask}</div><div class="empty-title">Nenhuma criação em acompanhamento</div>
         <div class="empty-sub">Registra o briefing de um perfume — nome, proposta e prazo de maceração — e acompanha a maturação até ficar pronto pra avaliar de verdade.</div>
         <button class="btn-primary" data-action="new-perfume">+ Nova criação</button>
       </div>`;
@@ -2274,8 +2292,8 @@ function perfumeCardHtml(p) {
       </div>
       <div class="fcard-actions">
         <div class="fcard-actions-left">
-          <button class="btn-text" data-action="edit-perfume" data-id="${p.id}">editar</button>
-          <button class="btn-text danger" data-action="delete-perfume" data-id="${p.id}">remover</button>
+          <button class="btn-text" data-action="edit-perfume" data-id="${p.id}"><span class="btn-icon">${ICONS.edit}</span>editar</button>
+          <button class="btn-text danger" data-action="delete-perfume" data-id="${p.id}"><span class="btn-icon">${ICONS.trash}</span>remover</button>
         </div>
       </div>
     </div>`;
@@ -2293,7 +2311,7 @@ function openPerfumeModal(editId) {
   root.innerHTML = `
     <div class="overlay" id="overlay">
       <form class="modal" id="perfumeForm">
-        <div class="modal-title">${editing ? "Editar criação" : "Nova criação"}</div>
+        <div class="modal-header"><div class="modal-title">${editing ? "Editar criação" : "Nova criação"}</div><button type="button" class="modal-close" data-action="close-modal" aria-label="Fechar">${ICONS.close}</button></div>
 
         <label class="label">Nome do perfume</label>
         <input class="input" id="pf-name" value="${editing ? esc(editing.name) : ""}" placeholder="Ex: Brasa de Mel" />
@@ -2325,7 +2343,7 @@ function openPerfumeModal(editId) {
 
   document.getElementById("overlay").addEventListener("click", (e) => { if (e.target.id === "overlay") closeModal(); });
   document.getElementById("perfumeForm").addEventListener("click", (e) => e.stopPropagation());
-  root.querySelector('[data-action="close-modal"]').addEventListener("click", closeModal);
+  root.querySelectorAll('[data-action="close-modal"]').forEach((el) => el.addEventListener("click", closeModal));
 
   document.getElementById("perfumeForm").addEventListener("submit", async (e) => {
     e.preventDefault();
@@ -2419,7 +2437,7 @@ function openImportConfirm(parsed) {
   root.innerHTML = `
     <div class="overlay" id="overlay">
       <div class="modal" id="importModal">
-        <div class="modal-title">Importar backup</div>
+        <div class="modal-header"><div class="modal-title">Importar backup</div><button type="button" class="modal-close" data-action="close-modal" aria-label="Fechar">${ICONS.close}</button></div>
         <p style="font-size:13px;color:var(--ash);line-height:1.6;">
           O arquivo tem ${parsed.items.length} material(is), ${parsed.formulas.length} fórmula(s), ${parsed.accords.length} acorde(s), ${parsed.perfumes.length} criação(ões), ${parsed.lotes.length} lote(s) e ${parsed.movements.length} movimentação(ões). Como tu quer aplicar?
         </p>
@@ -2436,7 +2454,7 @@ function openImportConfirm(parsed) {
     </div>`;
   document.getElementById("overlay").addEventListener("click", (e) => { if (e.target.id === "overlay") closeModal(); });
   document.getElementById("importModal").addEventListener("click", (e) => e.stopPropagation());
-  root.querySelector('[data-action="close-modal"]').addEventListener("click", closeModal);
+  root.querySelectorAll('[data-action="close-modal"]').forEach((el) => el.addEventListener("click", closeModal));
   root.querySelectorAll("[data-mode]").forEach((btn) => {
     btn.addEventListener("click", () => confirmImport(parsed, btn.dataset.mode));
   });
