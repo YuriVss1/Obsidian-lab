@@ -834,6 +834,9 @@ function delegatedEstoqueClicks(e) {
     state.positionFilter = btn.dataset.pos;
     renderPositionChips();
     updateMaterialsList();
+  } else if (action === "toggle-read-more") {
+    handleToggleReadMore(btn.dataset.tid);
+    updateMaterialsList();
   }
 }
 
@@ -968,7 +971,7 @@ function materialCardHtml(it, f) {
           ${it.cas ? `<span style="font-family:'JetBrains Mono',monospace">CAS ${esc(it.cas)}</span>` : ""}
           ${it.supplier ? `<span>${esc(it.supplier)}</span>` : ""}
         </div>
-        ${it.notes ? `<div class="card-notes">${esc(it.notes)}</div>` : ""}
+        ${truncatableHtml(it.notes, "material-notes-" + it.id, "card-notes")}
         <div class="card-actions">
           <button class="btn-text" data-action="edit-material" data-id="${it.id}"><span class="btn-icon">${ICONS.edit}</span>editar</button>
           <button class="btn-text danger" data-action="delete-material" data-id="${it.id}"><span class="btn-icon">${ICONS.trash}</span>remover</button>
@@ -1212,6 +1215,9 @@ function delegatedFormulasClicks(e) {
   } else if (action === "produce-lote") {
     const formula = state.formulas.find((f) => f.id === btn.dataset.id);
     if (formula) openLoteModal(formula);
+  } else if (action === "toggle-read-more") {
+    handleToggleReadMore(btn.dataset.tid);
+    renderFormulasGrid();
   }
 }
 
@@ -1278,7 +1284,7 @@ function formulaCardHtml(formula, number) {
       </div>
       <div>
         <div class="fcard-name">${esc(formula.name)}</div>
-        ${formula.concept ? `<div class="fcard-concept">${esc(formula.concept)}</div>` : ""}
+        ${truncatableHtml(formula.concept, "formula-concept-" + formula.id, "fcard-concept")}
       </div>
       <div>
         <div class="pyramid-label"><span>Topo</span><span>Coração</span><span>Fundo</span></div>
@@ -1652,6 +1658,10 @@ function delegatedLotesClicks(e) {
     state.collapsed.movements = !state.collapsed.movements;
     renderTabContent();
   } else if (action === "new-movement") openMovementModal();
+  else if (action === "toggle-read-more") {
+    handleToggleReadMore(btn.dataset.tid);
+    renderLotesGrid();
+  }
 }
 
 function renderLotesGrid() {
@@ -1683,7 +1693,7 @@ function loteCardHtml(l) {
       ${maturityBarHtml(info)}
       <div class="label" style="margin-top:0;">Materiais consumidos</div>
       <div class="mat-list">${consumedHtml}</div>
-      ${l.notes ? `<div class="card-notes">${esc(l.notes)}</div>` : ""}
+      ${truncatableHtml(l.notes, "lote-notes-" + l.id, "card-notes")}
       <div class="log-section">
         <div class="label" style="margin-top:0;">Evolução do lote</div>
         ${logListHtml(l.log)}
@@ -1958,6 +1968,26 @@ function formatDateBR(iso) {
   return d.toLocaleDateString("pt-BR");
 }
 
+/* ---------------------------- TEXTO EXPANSÍVEL ------------------------------ */
+// Textos longos (notas, briefing, conceito) ficam truncados por padrão com "Leia mais".
+const expandedTexts = {};
+const READ_MORE_THRESHOLD = 130;
+
+function truncatableHtml(text, tid, extraClass) {
+  if (!text) return "";
+  const needsToggle = text.length > READ_MORE_THRESHOLD;
+  const expanded = !!expandedTexts[tid];
+  return `
+    <div class="truncatable ${extraClass || ""}" data-tid="${tid}">
+      <div class="truncatable-content ${needsToggle && !expanded ? "clamped" : ""}">${esc(text)}</div>
+      ${needsToggle ? `<button type="button" class="read-more-btn" data-action="toggle-read-more" data-tid="${tid}">${expanded ? "Leia menos" : "Leia mais"}</button>` : ""}
+    </div>`;
+}
+
+function handleToggleReadMore(tid) {
+  expandedTexts[tid] = !expandedTexts[tid];
+}
+
 /* -------------------------------- ACORDES TAB ------------------------------- */
 
 function acordesShellHtml() {
@@ -1984,6 +2014,10 @@ function delegatedAcordesClicks(e) {
   else if (action === "edit-accord") openAccordModal(btn.dataset.id);
   else if (action === "delete-accord") handleDeleteAccord(btn.dataset.id);
   else if (action === "add-accord-log") handleAddLog("accord", btn.dataset.id);
+  else if (action === "toggle-read-more") {
+    handleToggleReadMore(btn.dataset.tid);
+    renderAccordsGrid();
+  }
 }
 
 function renderAccordsGrid() {
@@ -2016,7 +2050,7 @@ function accordCardHtml(a) {
       ${maturityBarHtml(info)}
       <div class="fcard-total"><span>${a.materials.length} material${a.materials.length === 1 ? "" : "es"}</span><span>total ${fmt(totalPct)}%</span></div>
       <div class="mat-list">${matListHtml}</div>
-      ${a.notes ? `<div class="card-notes">${esc(a.notes)}</div>` : ""}
+      ${truncatableHtml(a.notes, "accord-notes-" + a.id, "card-notes")}
       <div class="log-section">
         <div class="label" style="margin-top:0;">Evolução</div>
         ${logListHtml(a.log)}
@@ -2250,6 +2284,10 @@ function delegatedPerfumesClicks(e) {
   else if (action === "edit-perfume") openPerfumeModal(btn.dataset.id);
   else if (action === "delete-perfume") handleDeletePerfume(btn.dataset.id);
   else if (action === "add-perfume-log") handleAddLog("perfume", btn.dataset.id);
+  else if (action === "toggle-read-more") {
+    handleToggleReadMore(btn.dataset.tid);
+    renderPerfumesGrid();
+  }
 }
 
 function renderPerfumesGrid() {
@@ -2278,10 +2316,10 @@ function perfumeCardHtml(p) {
         <span class="fcard-type">${p.maturationDays}d de maceração</span>
       </div>
       <div class="fcard-name">${esc(p.name)}</div>
-      ${p.briefing ? `<div class="fcard-concept">${esc(p.briefing)}</div>` : ""}
+      ${truncatableHtml(p.briefing, "perfume-briefing-" + p.id, "fcard-concept")}
       ${linkedFormula ? `<div style="font-size:11px;color:var(--gold);">fórmula vinculada: ${esc(linkedFormula.name)}</div>` : ""}
       ${maturityBarHtml(info)}
-      ${p.notes ? `<div class="card-notes">${esc(p.notes)}</div>` : ""}
+      ${truncatableHtml(p.notes, "perfume-notes-" + p.id, "card-notes")}
       <div class="log-section">
         <div class="label" style="margin-top:0;">Evolução</div>
         ${logListHtml(p.log)}

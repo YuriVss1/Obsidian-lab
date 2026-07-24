@@ -217,3 +217,7 @@ input:focus, select:focus, textarea:focus { outline:none; border-color:var(--gol
 .loading-state { display:flex; align-items:center; justify-content:center; gap:12px; min-height:60vh; color:var(--ash); font-size:13.5px; animation:fadeIn .3s var(--ease) both; }
 .spinner { width:18px; height:18px; border-radius:50%; border:2px solid var(--hair); border-top-color:var(--gold); animation:spin .8s linear infinite; }
 @keyframes spin { to { transform:rotate(360deg); } }
+
+.truncatable-content.clamped { display:-webkit-box; -webkit-line-clamp:3; -webkit-box-orient:vertical; overflow:hidden; }
+.read-more-btn { background:none; border:none; color:var(--gold); font-size:11px; padding:2px 0 0; margin-top:2px; font-weight:600; }
+.read-more-btn:hover { text-decoration:underline; }
