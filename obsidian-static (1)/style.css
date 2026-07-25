@@ -221,3 +221,28 @@ input:focus, select:focus, textarea:focus { outline:none; border-color:var(--gol
 .truncatable-content.clamped { display:-webkit-box; -webkit-line-clamp:3; -webkit-box-orient:vertical; overflow:hidden; }
 .read-more-btn { background:none; border:none; color:var(--gold); font-size:11px; padding:2px 0 0; margin-top:2px; font-weight:600; }
 .read-more-btn:hover { text-decoration:underline; }
+
+.history-entry { display:flex; gap:8px; font-size:11.5px; padding:4px 0; border-bottom:1px solid var(--hair-soft); }
+.history-entry:last-child { border-bottom:none; }
+
+#printArea { display:none; }
+@media print {
+  body * { visibility:hidden; }
+  #printArea, #printArea * { visibility:visible; }
+  #printArea { display:block; position:absolute; top:0; left:0; width:100%; }
+  .print-label { width:280px; padding:20px; border:1px dashed #000; font-family:'Inter',sans-serif; color:#000; }
+  .print-label h2 { font-family:'Fraunces',serif; font-size:20px; margin:0 0 4px; }
+  .print-label .pl-code { font-family:'JetBrains Mono',monospace; font-size:12px; margin-bottom:10px; }
+  .print-label .pl-row { display:flex; justify-content:space-between; font-size:11px; padding:2px 0; border-bottom:1px solid #ccc; }
+}
+
+.tab-badge { display:inline-flex; align-items:center; justify-content:center; min-width:16px; height:16px; padding:0 4px; margin-left:6px; border-radius:8px; background:var(--gold); color:var(--obsidian); font-size:10px; font-weight:700; }
+
+.stats-grid { display:grid; grid-template-columns:repeat(auto-fit, minmax(190px,1fr)); gap:12px; margin-bottom:26px; }
+.stat-card { background:var(--onyx); border:1px solid var(--hair); border-radius:10px; padding:16px; animation:fadeInUp .3s var(--ease) both; }
+.stat-label { font-size:11px; color:var(--ash); text-transform:uppercase; letter-spacing:0.04em; margin-bottom:8px; }
+.stat-value { font-family:'Fraunces',serif; font-size:26px; font-weight:500; color:var(--white); }
+.stat-sub { font-size:11px; color:var(--ash-dim); margin-top:4px; }
+.ready-list { display:flex; flex-direction:column; gap:6px; margin-top:12px; }
+.ready-row { display:flex; align-items:center; gap:10px; background:var(--onyx); border:1px solid var(--hair); border-radius:8px; padding:10px 12px; text-align:left; color:var(--white-dim); font-size:13px; }
+.ready-row:hover { border-color:var(--gold-line); }

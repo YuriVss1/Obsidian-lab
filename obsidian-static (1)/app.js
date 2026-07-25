@@ -239,7 +239,22 @@ function computeCompatibility(materials) {
     }
   }
 
-  return { score: finalScore, label, colorVar, bestPair, worstPair, positionNote, materialsConsidered: valid.length };
+  // sugestão de família-ponte quando a pior dupla compete de verdade
+  let suggestion = null;
+  if (worstPair && worstPair.score < -0.1) {
+    const usedFamilies = new Set(valid.map((m) => m.family));
+    let bestBridge = null;
+    FAMILIES.forEach((f) => {
+      if (usedFamilies.has(f.key)) return;
+      const avg = (familyAffinity(f.key, worstPair.a) + familyAffinity(f.key, worstPair.b)) / 2;
+      if (!bestBridge || avg > bestBridge.avg) bestBridge = { family: f.key, avg };
+    });
+    if (bestBridge && bestBridge.avg > 0.3) {
+      suggestion = `Considera adicionar um toque de ${famMap[bestBridge.family].label} pra equilibrar ${famMap[worstPair.a].label} e ${famMap[worstPair.b].label}.`;
+    }
+  }
+
+  return { score: finalScore, label, colorVar, bestPair, worstPair, positionNote, suggestion, materialsConsidered: valid.length };
 }
 
 function compatibilityPanelHtml(result) {
@@ -252,13 +267,14 @@ function compatibilityPanelHtml(result) {
     ? `<div class="compat-note" style="color:var(--danger);">⚠ ${esc(famMap[result.worstPair.a]?.label || result.worstPair.a)} e ${esc(famMap[result.worstPair.b]?.label || result.worstPair.b)} tendem a competir</div>`
     : "";
   const posTxt = result.positionNote ? `<div class="compat-note" style="color:var(--ash-dim);">${esc(result.positionNote)}</div>` : "";
+  const suggestionTxt = result.suggestion ? `<div class="compat-note" style="color:var(--gold);">💡 ${esc(result.suggestion)}</div>` : "";
   return `
     <div class="compat-box">
       <div class="maturity-row">
         <div class="maturity-bar"><div class="maturity-fill" style="width:${pct}%;background:${result.colorVar}"></div></div>
         <span class="maturity-label" style="color:${result.colorVar}">${esc(result.label)}</span>
       </div>
-      ${bestTxt}${worstTxt}${posTxt}
+      ${bestTxt}${worstTxt}${posTxt}${suggestionTxt}
       <div class="compat-disclaimer">baseado em pareamentos clássicos de família olfativa — usa como referência, não como regra fixa</div>
     </div>`;
 }
@@ -325,6 +341,35 @@ function brl(n) {
   return "R$ " + n.toFixed(2).replace(".", ",");
 }
 
+// Quanto (em ml) dá pra produzir agora dessa fórmula, limitado pelo material mais escasso.
+function computeMaxProduction(formula) {
+  let maxVolume = Infinity;
+  let limitingMaterial = null;
+  let unlinkedCount = 0;
+  formula.materials.forEach((m) => {
+    const inv = m.inventoryId ? state.items.find((it) => it.id === m.inventoryId) : null;
+    if (!inv) { unlinkedCount += 1; return; }
+    if (m.percentage <= 0) return;
+    // needed(volume) = volume * (concPct/100) * (m.percentage/100)  =>  volume = available / fator
+    const factor = (formula.concentrationPct / 100) * (m.percentage / 100);
+    if (factor <= 0) return;
+    const volumeForThis = inv.quantity / factor;
+    if (volumeForThis < maxVolume) { maxVolume = volumeForThis; limitingMaterial = inv.name; }
+  });
+  if (maxVolume === Infinity) return { maxVolume: null, limitingMaterial: null, unlinkedCount };
+  return { maxVolume, limitingMaterial, unlinkedCount };
+}
+
+// Margem de lucro estimada, comparando preço de venda vs. custo da fórmula pro mesmo volume.
+function marginInfo(formula) {
+  if (formula.sellingPrice == null || formula.sellingVolumeMl == null || formula.sellingVolumeMl <= 0) return null;
+  const cost = formulaCostInfo(formula);
+  const totalCost = cost.costPerFinishedMl * formula.sellingVolumeMl;
+  const margin = formula.sellingPrice - totalCost;
+  const marginPct = formula.sellingPrice > 0 ? (margin / formula.sellingPrice) * 100 : null;
+  return { totalCost, margin, marginPct, missingCount: cost.missingCount };
+}
+
 const mapFormulaFromDb = (row) => ({
   id: row.id,
   createdAt: row.created_at ? new Date(row.created_at).getTime() : Date.now(),
@@ -334,6 +379,9 @@ const mapFormulaFromDb = (row) => ({
   concentrationPct: Number(row.concentration_pct),
   materials: Array.isArray(row.materials) ? row.materials : [],
   notes: row.notes || "",
+  sellingPrice: row.selling_price != null ? Number(row.selling_price) : null,
+  sellingVolumeMl: row.selling_volume_ml != null ? Number(row.selling_volume_ml) : null,
+  history: Array.isArray(row.history) ? row.history : [],
 });
 
 const toFormulaRow = (f) => ({
@@ -343,6 +391,9 @@ const toFormulaRow = (f) => ({
   concentration_pct: f.concentrationPct,
   materials: f.materials,
   notes: f.notes,
+  selling_price: f.sellingPrice != null ? f.sellingPrice : null,
+  selling_volume_ml: f.sellingVolumeMl != null ? f.sellingVolumeMl : null,
+  history: f.history || [],
 });
 
 const mapAccordFromDb = (row) => ({
@@ -452,7 +503,7 @@ function maturityInfo(createdAt, maturationDays) {
 /* --------------------------------- STATE ---------------------------------- */
 
 const state = {
-  tab: "estoque",
+  tab: "painel",
   items: [],
   formulas: [],
   accords: [],
@@ -724,12 +775,37 @@ async function registerManualMovement({ materialId, type, quantity, origin, note
 /* --------------------------------- RENDER --------------------------------- */
 
 const TABS = [
+  { key: "painel", label: "Painel" },
   { key: "estoque", label: "Estoque" },
   { key: "formulas", label: "Fórmulas" },
   { key: "acordes", label: "Acordes" },
   { key: "perfumes", label: "Perfumes" },
   { key: "lotes", label: "Lotes" },
 ];
+
+function maturedCount(list) {
+  return list.filter((it) => maturityInfo(it.createdAt, it.maturationDays).mature).length;
+}
+
+function tabBadgeHtml(tabKey) {
+  let count = 0;
+  if (tabKey === "acordes") count = maturedCount(state.accords);
+  else if (tabKey === "perfumes") count = maturedCount(state.perfumes);
+  else if (tabKey === "lotes") count = maturedCount(state.lotes);
+  else if (tabKey === "estoque") count = state.items.filter((it) => it.minStock != null && it.quantity <= it.minStock).length;
+  if (count === 0) return "";
+  return `<span class="tab-badge">${count}</span>`;
+}
+
+function refreshTabBadges() {
+  document.querySelectorAll(".tab-btn").forEach((btn) => {
+    const key = btn.dataset.tab;
+    const existing = btn.querySelector(".tab-badge");
+    if (existing) existing.remove();
+    const html = tabBadgeHtml(key);
+    if (html) btn.insertAdjacentHTML("beforeend", html);
+  });
+}
 
 function render() {
   const app = document.getElementById("app");
@@ -748,7 +824,7 @@ function render() {
           </div>
         </div>
         <div class="tabs">
-          ${TABS.map((t) => `<button class="tab-btn ${state.tab === t.key ? "active" : ""}" data-action="tab" data-tab="${t.key}">${esc(t.label)}</button>`).join("")}
+          ${TABS.map((t) => `<button class="tab-btn ${state.tab === t.key ? "active" : ""}" data-action="tab" data-tab="${t.key}">${esc(t.label)}${tabBadgeHtml(t.key)}</button>`).join("")}
         </div>
         <div class="backup-actions">
           <input type="file" accept="application/json" id="importFile" style="display:none" />
@@ -760,6 +836,7 @@ function render() {
     </div>
     <div id="toast" class="toast" style="display:none"></div>
     <div id="modalRoot"></div>
+    <div id="printArea"></div>
   `;
   renderTabContent();
   wireTopbar();
@@ -771,11 +848,87 @@ function renderTabContent() {
     el.innerHTML = `<div class="loading-state"><div class="spinner"></div><span>Carregando laboratório...</span></div>`;
     return;
   }
-  if (state.tab === "estoque") { el.innerHTML = estoqueShellHtml(); wireEstoqueShell(); }
+  if (state.tab === "painel") { el.innerHTML = painelShellHtml(); wirePainelShell(); }
+  else if (state.tab === "estoque") { el.innerHTML = estoqueShellHtml(); wireEstoqueShell(); }
   else if (state.tab === "formulas") { el.innerHTML = formulasShellHtml(); wireFormulasShell(); }
   else if (state.tab === "acordes") { el.innerHTML = acordesShellHtml(); wireAcordesShell(); }
   else if (state.tab === "perfumes") { el.innerHTML = perfumesShellHtml(); wirePerfumesShell(); }
   else if (state.tab === "lotes") { el.innerHTML = lotesShellHtml(); wireLotesShell(); }
+}
+
+/* --------------------------------- PAINEL ---------------------------------- */
+
+function painelShellHtml() {
+  const totalStockValue = state.items.reduce((sum, it) => {
+    const uc = unitCost(it);
+    return sum + (uc != null ? uc * it.quantity : 0);
+  }, 0);
+  const missingCostCount = state.items.filter((it) => unitCost(it) == null).length;
+  const lowStockCount = state.items.filter((it) => it.minStock != null && it.quantity <= it.minStock).length;
+  const maturedAccords = state.accords.filter((a) => maturityInfo(a.createdAt, a.maturationDays).mature);
+  const maturedPerfumes = state.perfumes.filter((p) => maturityInfo(p.createdAt, p.maturationDays).mature);
+  const maturedLotes = state.lotes.filter((l) => maturityInfo(l.createdAt, l.maturationDays).mature);
+  const totalMatured = maturedAccords.length + maturedPerfumes.length + maturedLotes.length;
+
+  const statCard = (label, value, sub) => `
+    <div class="stat-card">
+      <div class="stat-label">${esc(label)}</div>
+      <div class="stat-value">${value}</div>
+      ${sub ? `<div class="stat-sub">${esc(sub)}</div>` : ""}
+    </div>`;
+
+  const readyRows = [
+    ...maturedAccords.map((a) => ({ tab: "acordes", name: a.name, kind: "Acorde" })),
+    ...maturedPerfumes.map((p) => ({ tab: "perfumes", name: p.name, kind: "Perfume" })),
+    ...maturedLotes.map((l) => ({ tab: "lotes", name: `${l.code} — ${l.formulaName}`, kind: "Lote" })),
+  ];
+
+  const isEmpty = state.items.length === 0 && state.formulas.length === 0;
+
+  return `
+    <div class="stats-grid">
+      ${statCard("Valor em estoque", brl(totalStockValue), missingCostCount > 0 ? `${missingCostCount} material(is) sem custo cadastrado` : "")}
+      ${statCard("Materiais em baixa", lowStockCount, lowStockCount > 0 ? "confira o estoque" : "tudo certo")}
+      ${statCard("Prontos pra avaliar", totalMatured, totalMatured > 0 ? "acordes, perfumes e lotes maduros" : "nada maduro ainda")}
+      ${statCard("Catálogo", `${state.formulas.length} fórmulas`, `${state.accords.length} acordes · ${state.perfumes.length} perfumes · ${state.lotes.length} lotes`)}
+    </div>
+    ${
+      totalMatured > 0
+        ? `
+      <section class="fam-section">
+        <div class="fam-header" style="border-bottom:1px solid var(--hair);padding:10px 2px;">
+          <span class="fam-title">Prontos pra avaliar agora</span>
+        </div>
+        <div class="ready-list">
+          ${readyRows.map((r) => `<button class="ready-row" data-action="goto-tab" data-tab="${r.tab}"><span class="badge">${esc(r.kind)}</span><span>${esc(r.name)}</span></button>`).join("")}
+        </div>
+      </section>`
+        : ""
+    }
+    ${
+      isEmpty
+        ? `
+      <div class="empty">
+        <div class="empty-icon">${ICONS.flask}</div>
+        <div class="empty-title">Bem-vindo ao teu laboratório</div>
+        <div class="empty-sub">Começa cadastrando materiais no Estoque, depois monta tuas Fórmulas.</div>
+        <button class="btn-primary" data-action="goto-tab" data-tab="estoque">Ir pro Estoque</button>
+      </div>`
+        : ""
+    }
+  `;
+}
+
+function wirePainelShell() {
+  document.getElementById("tabContent").addEventListener("click", (e) => {
+    const btn = e.target.closest("[data-action]");
+    if (!btn) return;
+    if (btn.dataset.action === "goto-tab") {
+      state.tab = btn.dataset.tab;
+      renderTabbarActive();
+      renderTabContent();
+    }
+  });
 }
 
 /* ------------------------------ ESTOQUE TAB -------------------------------- */
@@ -945,6 +1098,7 @@ function updateMaterialsList() {
       </section>`;
   });
   el.innerHTML = html || `<div class="empty"><div class="empty-sub">Nenhum material bate com esse filtro.</div></div>`;
+  refreshTabBadges();
 }
 
 function materialCardHtml(it, f) {
@@ -1218,6 +1372,9 @@ function delegatedFormulasClicks(e) {
   } else if (action === "toggle-read-more") {
     handleToggleReadMore(btn.dataset.tid);
     renderFormulasGrid();
+  } else if (action === "toggle-history") {
+    historyOpenState[btn.dataset.id] = !historyOpenState[btn.dataset.id];
+    renderFormulasGrid();
   }
 }
 
@@ -1236,6 +1393,7 @@ function renderFormulasGrid() {
   }
   el.innerHTML = `<div class="forms-grid">${sorted.map((f, i) => formulaCardHtml(f, i + 1)).join("")}</div>`;
   sorted.forEach((f) => wireCalculator(f));
+  refreshTabBadges();
 }
 
 function formulaCardHtml(formula, number) {
@@ -1296,6 +1454,9 @@ function formulaCardHtml(formula, number) {
       </div>
       <div class="mat-list">${matListHtml}</div>
       ${costTableHtml(formula)}
+      ${maxProductionHtml(formula)}
+      ${marginHtml(formula)}
+      ${historyToggleHtml(formula)}
       <button class="calc-toggle" data-action="toggle-calc" data-id="${formula.id}" data-defaultpct="${formula.concentrationPct}">${cs.open ? "▾" : "▸"} calculadora de lote</button>
       <div class="calc-box ${cs.open ? "" : "hidden"}" id="calcBox-${formula.id}">
         <div class="calc-inputs">
@@ -1330,6 +1491,46 @@ function costTableHtml(formula) {
       ${rows}
     </div>`;
 }
+
+function maxProductionHtml(formula) {
+  const info = computeMaxProduction(formula);
+  if (info.maxVolume == null) {
+    return `<div class="calc-result-row" style="font-size:11px;"><span style="color:var(--ash-dim)">produção máxima agora</span><span style="color:var(--ash-dim)">não calculável${info.unlinkedCount > 0 ? " · material sem vínculo" : ""}</span></div>`;
+  }
+  return `<div class="calc-result-row" style="font-size:11px;"><span style="color:var(--ash-dim)">produção máxima agora</span><span>${fmt(info.maxVolume)}ml <span style="color:var(--ash-dim)">(limitado por ${esc(info.limitingMaterial)})</span></span></div>`;
+}
+
+function marginHtml(formula) {
+  const m = marginInfo(formula);
+  if (!m) return "";
+  const marginColor = m.margin >= 0 ? "var(--ok)" : "var(--danger)";
+  return `
+    <div class="calc-result-row" style="font-size:11px;">
+      <span style="color:var(--ash-dim)">venda ${fmt(formula.sellingVolumeMl)}ml por ${brl(formula.sellingPrice)}</span>
+      <span style="color:${marginColor}">margem ${brl(m.margin)}${m.marginPct != null ? ` (${m.marginPct.toFixed(0)}%)` : ""}</span>
+    </div>`;
+}
+
+const historyOpenState = {};
+
+function historyToggleHtml(formula) {
+  if (!formula.history || formula.history.length === 0) return "";
+  const open = !!historyOpenState[formula.id];
+  const rows = [...formula.history]
+    .reverse()
+    .map(
+      (h) => `
+      <div class="history-entry">
+        <span class="log-date">${esc(formatDateBR(h.savedAt))}</span>
+        <span class="log-note">${esc(h.name)} · ${h.materials.length} material(is) · ${esc(h.concentrationType)} ${fmt(h.concentrationPct)}%</span>
+      </div>`
+    )
+    .join("");
+  return `
+    <button class="calc-toggle" data-action="toggle-history" data-id="${formula.id}">${open ? "▾" : "▸"} histórico de versões (${formula.history.length})</button>
+    <div class="calc-box ${open ? "" : "hidden"}">${rows}</div>`;
+}
+
 
 function wireCalculator(formula) {
   const batchInput = document.getElementById("batchSize-" + formula.id);
@@ -1417,6 +1618,18 @@ function openFormulaModal(editId) {
         <label class="label">Notas</label>
         <textarea class="input" id="ff-notes" style="min-height:60px;resize:vertical;">${editing ? esc(editing.notes) : ""}</textarea>
 
+        <label class="label" style="margin-top:16px;">Preço de venda (opcional)</label>
+        <div class="row2">
+          <div>
+            <label class="label" style="margin-top:0;">Preço (R$)</label>
+            <input class="input" id="ff-sellingPrice" type="number" step="0.01" value="${editing && editing.sellingPrice != null ? editing.sellingPrice : ""}" placeholder="Ex: 150,00" />
+          </div>
+          <div>
+            <label class="label" style="margin-top:0;">Pro volume de (ml)</label>
+            <input class="input" id="ff-sellingVolume" type="number" step="0.1" value="${editing && editing.sellingVolumeMl != null ? editing.sellingVolumeMl : ""}" placeholder="Ex: 30" />
+          </div>
+        </div>
+
         <div class="form-error" id="formulaFormError" style="display:none;"></div>
 
         <div class="modal-actions">
@@ -1483,6 +1696,23 @@ function openFormulaModal(editId) {
       })
       .filter((m) => m.name);
 
+    const sellingPriceRaw = document.getElementById("ff-sellingPrice").value;
+    const sellingVolumeRaw = document.getElementById("ff-sellingVolume").value;
+
+    const history = editing ? [...editing.history] : [];
+    if (editing) {
+      // guarda um retrato da versão anterior antes de sobrescrever
+      history.push({
+        savedAt: new Date().toISOString(),
+        name: editing.name,
+        concept: editing.concept,
+        concentrationType: editing.concentrationType,
+        concentrationPct: editing.concentrationPct,
+        materials: editing.materials,
+        notes: editing.notes,
+      });
+    }
+
     const record = {
       name,
       concept: document.getElementById("ff-concept").value.trim(),
@@ -1490,6 +1720,9 @@ function openFormulaModal(editId) {
       concentrationPct: parseFloat(document.getElementById("ff-concPct").value) || 0,
       materials,
       notes: document.getElementById("ff-notes").value.trim(),
+      sellingPrice: sellingPriceRaw === "" ? null : parseFloat(sellingPriceRaw),
+      sellingVolumeMl: sellingVolumeRaw === "" ? null : parseFloat(sellingVolumeRaw),
+      history,
     };
 
     const ok = editing ? await updateFormula(editing.id, record) : await addFormula(record);
@@ -1661,6 +1894,9 @@ function delegatedLotesClicks(e) {
   else if (action === "toggle-read-more") {
     handleToggleReadMore(btn.dataset.tid);
     renderLotesGrid();
+  } else if (action === "print-label") {
+    const lote = state.lotes.find((l) => l.id === btn.dataset.id);
+    if (lote) printLoteLabel(lote);
   }
 }
 
@@ -1677,6 +1913,7 @@ function renderLotesGrid() {
     return;
   }
   el.innerHTML = `<div class="forms-grid">${sorted.map((l) => loteCardHtml(l)).join("")}</div>`;
+  refreshTabBadges();
 }
 
 function loteCardHtml(l) {
@@ -1706,8 +1943,23 @@ function loteCardHtml(l) {
         <div class="fcard-actions-left">
           <button class="btn-text danger" data-action="delete-lote" data-id="${l.id}"><span class="btn-icon">${ICONS.trash}</span>remover</button>
         </div>
+        <button class="btn-ghost small" data-action="print-label" data-id="${l.id}">Imprimir etiqueta</button>
       </div>
     </div>`;
+}
+
+function printLoteLabel(l) {
+  const area = document.getElementById("printArea");
+  area.innerHTML = `
+    <div class="print-label">
+      <h2>${esc(l.formulaName)}</h2>
+      <div class="pl-code">${esc(l.code)}</div>
+      <div class="pl-row"><span>Data</span><span>${esc(formatDateBR(new Date(l.createdAt).toISOString()))}</span></div>
+      <div class="pl-row"><span>Tipo</span><span>${l.type === "producao" ? "Produção" : "Teste"}</span></div>
+      <div class="pl-row"><span>Volume</span><span>${fmt(l.volumeMl)}ml</span></div>
+      <div class="pl-row"><span>Maceração</span><span>${l.maturationDays} dias</span></div>
+    </div>`;
+  window.print();
 }
 
 async function handleDeleteLote(id) {
@@ -2034,6 +2286,7 @@ function renderAccordsGrid() {
     return;
   }
   el.innerHTML = `<div class="forms-grid">${sorted.map((a) => accordCardHtml(a)).join("")}</div>`;
+  refreshTabBadges();
 }
 
 function accordCardHtml(a) {
@@ -2304,6 +2557,7 @@ function renderPerfumesGrid() {
     return;
   }
   el.innerHTML = `<div class="forms-grid">${sorted.map((p) => perfumeCardHtml(p)).join("")}</div>`;
+  refreshTabBadges();
 }
 
 function perfumeCardHtml(p) {
