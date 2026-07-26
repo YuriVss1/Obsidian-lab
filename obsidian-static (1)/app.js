@@ -1660,7 +1660,12 @@ function openFormulaModal(editId) {
     e.preventDefault();
     const name = document.getElementById("ff-name").value.trim();
     const errEl = document.getElementById("formulaFormError");
-    const validRows = formulaRows.filter((r) => (document.getElementById("row-name-" + r.rowId) ? document.getElementById("row-name-" + r.rowId).value.trim() : r.name.trim()));
+    const validRows = formulaRows.filter((r) => {
+      const invSelect = document.getElementById("row-inv-" + r.rowId);
+      if (invSelect && invSelect.value) return true;
+      const nameInput = document.getElementById("row-name-" + r.rowId);
+      return nameInput ? nameInput.value.trim() : r.name.trim();
+    });
     if (!name) { errEl.textContent = "Dá um nome pra criação antes de salvar."; errEl.style.display = "block"; return; }
     if (validRows.length === 0) { errEl.textContent = "Adiciona pelo menos um material com nome preenchido."; errEl.style.display = "block"; return; }
     errEl.style.display = "none";
